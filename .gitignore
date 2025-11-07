@@ -1,0 +1,15 @@
+node_modules/
+.env
+.DS_Store
+logs/
+*.log
+npm-debug.log*
+uploads/
+yoti-key.pem
+.vscode/
+.idea/
+dist/
+build/
+coverage/
+%USERPROFILE%
+
