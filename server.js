@@ -198,11 +198,15 @@ process.on('SIGTERM', async () => {
     // Close Redis
     await closeRedis();
     
-    // Close MongoDB
-    mongoose.connection.close(false, () => {
+    // Close MongoDB (Mongoose 7+ doesn't accept callback)
+    try {
+      await mongoose.connection.close();
       logger.info('MongoDB connection closed');
-      process.exit(0);
-    });
+    } catch (error) {
+      logger.error('Error closing MongoDB connection:', error);
+    }
+    
+    process.exit(0);
   });
 });
 
