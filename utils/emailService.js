@@ -1,23 +1,28 @@
 const nodemailer = require('nodemailer');
 const logger = require('./logger');
 
-// Create transporter with Gmail SMTP
+// Create transporter with SMTP configuration (Brevo or any SMTP service)
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: process.env.SMTP_HOST,
+  port: parseInt(process.env.SMTP_PORT) || 587,
+  secure: false, // true for 465, false for other ports
   auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
+  },
+  tls: {
+    rejectUnauthorized: false
   }
 });
 
 // Verify connection
 transporter.verify((error, success) => {
   if (error) {
-    logger.error('❌ Gmail SMTP connection error:', error);
-    console.log('❌ Gmail SMTP connection error:', error.message);
+    logger.error('❌ SMTP connection error:', error);
+    console.log('❌ SMTP connection error:', error.message);
   } else {
-    logger.info('✅ Gmail SMTP is ready to send emails');
-    console.log('✅ Gmail SMTP is ready to send emails');
+    logger.info('✅ Email service is ready (using ' + process.env.SMTP_HOST + ')');
+    console.log('✅ Email service is ready (using ' + process.env.SMTP_HOST + ')');
   }
 });
 
@@ -27,7 +32,7 @@ exports.sendOTPEmail = async (to, otp, name = 'User') => {
     const mailOptions = {
       from: {
         name: 'HashView',
-        address: process.env.GMAIL_USER
+        address: process.env.FROM_EMAIL || process.env.SMTP_USER
       },
       to: to,
       subject: 'HashView - Email Verification Code',
@@ -149,7 +154,7 @@ exports.sendPasswordResetEmail = async (to, otp, name = 'User') => {
     const mailOptions = {
       from: {
         name: 'HashView',
-        address: process.env.GMAIL_USER
+        address: process.env.FROM_EMAIL || process.env.SMTP_USER
       },
       to: to,
       subject: 'HashView - Password Reset Code',
