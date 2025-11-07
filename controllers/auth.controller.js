@@ -830,4 +830,3 @@ exports.resetPasswordWithOTP = async (req, res, next) => {
     next(error);
   }
 };
-
