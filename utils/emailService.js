@@ -70,7 +70,7 @@ async function sendViaBrevoAPI(mailOptions) {
 }
 
 // Send OTP Email
-exports.sendOTPEmail = async (to, otp, name = 'User') => {
+const sendOTPEmail = async (to, otp, name = 'User') => {
   try {
     const mailOptions = {
       from: {
@@ -195,7 +195,7 @@ exports.sendOTPEmail = async (to, otp, name = 'User') => {
 };
 
 // Send Password Reset Email
-exports.sendPasswordResetEmail = async (to, otp, name = 'User') => {
+const sendPasswordResetEmail = async (to, otp, name = 'User') => {
   try {
     const mailOptions = {
       from: {
@@ -280,8 +280,8 @@ exports.sendPasswordResetEmail = async (to, otp, name = 'User') => {
   }
 };
 
+// Export functions
 module.exports = {
-  sendOTPEmail: exports.sendOTPEmail,
-  sendPasswordResetEmail: exports.sendPasswordResetEmail
+  sendOTPEmail,
+  sendPasswordResetEmail
 };
-
