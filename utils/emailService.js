@@ -1,833 +1,287 @@
-const User = require('../models/User.model');
-const BusinessOwner = require('../models/BusinessOwner.model');
-const SuspendedAccount = require('../models/SuspendedAccount.model');
-const { generateToken } = require('../utils/jwt');
-const crypto = require('crypto');
-const logger = require('../utils/logger');
-const { sendOTPEmail, sendPasswordResetEmail } = require('../utils/emailService');
+const nodemailer = require('nodemailer');
+const axios = require('axios');
+const logger = require('./logger');
 
-// In-memory OTP storage (in production, use Redis)
-const otpStore = new Map();
-const emailOtpStore = new Map();
+// Check if we should use Brevo API instead of SMTP
+const useBrevoAPI = process.env.BREVO_API_KEY;
 
-// @desc    Register new user
-// @route   POST /api/auth/register
-// @access  Public
-exports.register = async (req, res, next) => {
-  try {
-    const { name, email, phone, password, role } = req.body;
+let transporter = null;
 
-    console.log('\n📝 Registration attempt:', { 
-      name, 
-      email, 
-      phone, 
-      phoneLength: phone?.length,
-      role 
-    });
-
-    // Prevent admin registration through API
-    if (role === 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin accounts cannot be created through registration. Please contact system administrator.'
-      });
+if (!useBrevoAPI) {
+  // Fallback to SMTP (only works on paid hosting or localhost)
+  transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT) || 587,
+    secure: false,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    },
+    tls: {
+      rejectUnauthorized: false
     }
+  });
 
-    // Validate role
-    const allowedRoles = ['customer', 'business'];
-    const userRole = role && allowedRoles.includes(role) ? role : 'customer';
-    
-    console.log(`\n📋 Registration Role Check:`);
-    console.log(`   - Requested role: ${role}`);
-    console.log(`   - Final userRole: ${userRole}`);
-
-    // Check if email is suspended
-    const suspendedAccount = await SuspendedAccount.findOne({ 
-      email: email.toLowerCase(), 
-      status: 'suspended' 
-    });
-
-    if (suspendedAccount) {
-      console.log(`❌ Registration blocked: Email is suspended`);
-      return res.status(403).json({
-        success: false,
-        message: 'This account has been suspended. Please contact support for assistance.',
-        reason: suspendedAccount.reason
-      });
-    }
-
-    // Check if email exists in SAME ROLE collection only (allow same email for different roles)
-    console.log(`\n📧 Email Validation for role: ${userRole}`);
-    const normalizedEmail = email.toLowerCase();
-    
-    if (userRole === 'business') {
-      // Check if email already exists as business owner (SAME ROLE - BLOCK)
-      const existingBusinessOwnerByEmail = await BusinessOwner.findOne({ email: normalizedEmail });
-      if (existingBusinessOwnerByEmail) {
-        console.log(`❌ Email ${normalizedEmail} already registered as business owner`);
-        return res.status(400).json({
-          success: false,
-          message: 'This email is already registered as a business owner. Please login or use a different email.',
-          field: 'email'
-        });
-      }
-      // Allow if email exists as customer (DIFFERENT ROLE - ALLOW)
-      const existingUserByEmail = await User.findOne({ email: normalizedEmail });
-      if (existingUserByEmail) {
-        console.log(`✅ Email ${normalizedEmail} exists as customer, but allowing business account creation (different role)`);
-      } else {
-        console.log(`✅ Email ${normalizedEmail} is available for business registration`);
-      }
+  // Verify SMTP connection
+  transporter.verify((error, success) => {
+    if (error) {
+      logger.error('❌ SMTP connection error (try using BREVO_API_KEY instead):', error);
+      console.log('❌ SMTP connection error. Consider using Brevo API instead of SMTP.');
     } else {
-      // Check if email already exists as customer (SAME ROLE - BLOCK)
-      const existingUserByEmail = await User.findOne({ email: normalizedEmail });
-      if (existingUserByEmail) {
-        console.log(`❌ Email ${normalizedEmail} already registered as customer`);
-        return res.status(400).json({
-          success: false,
-          message: 'This email is already registered as a customer. Please login or use a different email.',
-          field: 'email'
-        });
-      }
-      // Allow if email exists as business owner (DIFFERENT ROLE - ALLOW)
-      const existingBusinessOwnerByEmail = await BusinessOwner.findOne({ email: normalizedEmail });
-      if (existingBusinessOwnerByEmail) {
-        console.log(`✅ Email ${normalizedEmail} exists as business owner, but allowing customer account creation (different role)`);
-      } else {
-        console.log(`✅ Email ${normalizedEmail} is available for customer registration`);
-      }
+      logger.info('✅ Email service ready (SMTP)');
+      console.log('✅ Email service ready (SMTP)');
     }
+  });
+} else {
+  logger.info('✅ Email service using Brevo API');
+  console.log('✅ Email service using Brevo API (HTTP)');
+}
 
-    // Check if phone exists in SAME ROLE collection only (allow same phone for different roles)
-    console.log(`\n📱 Phone Validation for role: ${userRole}`);
-    
-    if (userRole === 'business') {
-      // Check if phone already exists as business owner (SAME ROLE - BLOCK duplicate)
-      const existingBusinessOwnerByPhone = await BusinessOwner.findOne({ phone });
-      if (existingBusinessOwnerByPhone) {
-        console.log(`❌ Phone ${phone} already registered as business owner (duplicate business account blocked)`);
-        // Check if they also have a customer account with same phone
-        const existingCustomerByPhone = await User.findOne({ phone });
-        if (existingCustomerByPhone) {
-          return res.status(400).json({
-            success: false,
-            message: 'You already have a business account with this phone number. You cannot create duplicate business accounts. Please login to your existing business account.',
-            field: 'phone',
-            hasBothAccounts: true
-          });
-        } else {
-          return res.status(400).json({
-            success: false,
-            message: 'This phone number is already registered as a business owner. Please login to your existing account or use a different phone number to create a new business account.',
-            field: 'phone'
-          });
+// Helper function to send email via Brevo API
+async function sendViaBrevoAPI(mailOptions) {
+  try {
+    const response = await axios.post(
+      'https://api.brevo.com/v3/smtp/email',
+      {
+        sender: {
+          name: mailOptions.from.name,
+          email: mailOptions.from.address
+        },
+        to: [{ email: mailOptions.to }],
+        subject: mailOptions.subject,
+        htmlContent: mailOptions.html
+      },
+      {
+        headers: {
+          'accept': 'application/json',
+          'api-key': process.env.BREVO_API_KEY,
+          'content-type': 'application/json'
         }
       }
-      // Allow if phone exists as customer (DIFFERENT ROLE - ALLOW)
-      const existingUserByPhone = await User.findOne({ phone });
-      if (existingUserByPhone) {
-        console.log(`✅ Phone ${phone} exists as customer, allowing business account creation (different role - same user)`);
-      } else {
-        console.log(`✅ Phone ${phone} is available for business registration`);
-      }
+    );
+
+    logger.info(`✅ Email sent via Brevo API to ${mailOptions.to}`);
+    console.log(`✅ Email sent via Brevo API to: ${mailOptions.to}`);
+    return { messageId: response.data.messageId };
+  } catch (error) {
+    logger.error('❌ Brevo API error:', error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || 'Failed to send email via Brevo API');
+  }
+}
+
+// Send OTP Email
+const sendOTPEmail = async (to, otp, name = 'User') => {
+  try {
+    const mailOptions = {
+      from: {
+        name: 'HashView',
+        address: process.env.FROM_EMAIL || process.env.SMTP_USER
+      },
+      to: to,
+      subject: 'HashView - Email Verification Code',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>HashView OTP</title>
+        </head>
+        <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f3f4f6;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 20px;">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                  
+                  <!-- Header with Gradient -->
+                  <tr>
+                    <td style="background: linear-gradient(135deg, #2D1B69 0%, #4F46E5 100%); padding: 40px 20px; text-align: center;">
+                      <h1 style="color: #ffffff; margin: 0; font-size: 32px; font-weight: bold;">
+                        #HashView
+                      </h1>
+                      <p style="color: #ffffff; margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">
+                        Review. Reward. Repeat.
+                      </p>
+                    </td>
+                  </tr>
+                  
+                  <!-- Content -->
+                  <tr>
+                    <td style="padding: 40px 30px;">
+                      <h2 style="color: #2D1B69; margin: 0 0 20px 0; font-size: 24px;">
+                        Email Verification
+                      </h2>
+                      
+                      <p style="color: #6b7280; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                        Hello ${name},
+                      </p>
+                      
+                      <p style="color: #6b7280; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
+                        Thank you for signing up with HashView! Please use the verification code below to complete your registration:
+                      </p>
+                      
+                      <!-- OTP Box -->
+                      <table width="100%" cellpadding="0" cellspacing="0" style="margin: 0 0 30px 0;">
+                        <tr>
+                          <td style="background: linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 100%); padding: 30px; border-radius: 12px; text-align: center; border: 2px dashed #FF8C00;">
+                            <p style="color: #92400e; font-size: 14px; margin: 0 0 10px 0; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">
+                              Your Verification Code
+                            </p>
+                            <h1 style="color: #FF8C00; font-size: 42px; font-weight: bold; margin: 0; letter-spacing: 12px; font-family: 'Courier New', monospace;">
+                              ${otp}
+                            </h1>
+                          </td>
+                        </tr>
+                      </table>
+                      
+                      <!-- Important Info -->
+                      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border-left: 4px solid #FF8C00; padding: 15px; border-radius: 8px; margin: 0 0 20px 0;">
+                        <tr>
+                          <td>
+                            <p style="color: #374151; font-size: 14px; margin: 0; line-height: 1.6;">
+                              <strong>⏰ Important:</strong> This code will expire in <strong>10 minutes</strong>.
+                            </p>
+                          </td>
+                        </tr>
+                      </table>
+                      
+                      <p style="color: #6b7280; font-size: 14px; line-height: 1.6; margin: 0 0 20px 0;">
+                        If you didn't request this verification code, please ignore this email or contact our support team.
+                      </p>
+                      
+                      <p style="color: #6b7280; font-size: 14px; line-height: 1.6; margin: 0;">
+                        Best regards,<br>
+                        <strong style="color: #2D1B69;">The HashView Team</strong>
+                      </p>
+                    </td>
+                  </tr>
+                  
+                  <!-- Footer -->
+                  <tr>
+                    <td style="background-color: #f9fafb; padding: 30px; text-align: center; border-top: 1px solid #e5e7eb;">
+                      <p style="color: #9ca3af; font-size: 12px; margin: 0 0 10px 0;">
+                        © 2025 HashView. All rights reserved.
+                      </p>
+                      <p style="color: #9ca3af; font-size: 12px; margin: 0;">
+                        This is an automated email, please do not reply.
+                      </p>
+                    </td>
+                  </tr>
+                  
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `
+    };
+
+    // Use Brevo API if available, otherwise use SMTP
+    if (useBrevoAPI) {
+      return await sendViaBrevoAPI(mailOptions);
     } else {
-      // Check if phone already exists as customer (SAME ROLE - BLOCK duplicate)
-      const existingUserByPhone = await User.findOne({ phone });
-      if (existingUserByPhone) {
-        console.log(`❌ Phone ${phone} already registered as customer (duplicate customer account blocked)`);
-        // Check if they also have a business account with same phone
-        const existingBusinessByPhone = await BusinessOwner.findOne({ phone });
-        if (existingBusinessByPhone) {
-          return res.status(400).json({
-            success: false,
-            message: 'You already have a customer account with this phone number. You cannot create duplicate customer accounts. Please login to your existing customer account.',
-            field: 'phone',
-            hasBothAccounts: true
-          });
-        } else {
-          return res.status(400).json({
-            success: false,
-            message: 'This phone number is already registered as a customer. Please login to your existing account or use a different phone number to create a new customer account.',
-            field: 'phone'
-          });
-        }
-      }
-      // Allow if phone exists as business owner (DIFFERENT ROLE - ALLOW)
-      const existingBusinessOwnerByPhone = await BusinessOwner.findOne({ phone });
-      if (existingBusinessOwnerByPhone) {
-        console.log(`✅ Phone ${phone} exists as business owner, allowing customer account creation (different role - same user)`);
-      } else {
-        console.log(`✅ Phone ${phone} is available for customer registration`);
-      }
+      const info = await transporter.sendMail(mailOptions);
+      logger.info(`✅ Email sent successfully to ${to}`);
+      console.log(`✅ Email sent to: ${to}`);
+      console.log(`📧 Message ID: ${info.messageId}`);
+      return info;
     }
+  } catch (error) {
+    logger.error('❌ Error sending email:', error);
+    console.error('❌ Error sending email:', error.message);
+    throw error;
+  }
+};
 
-    console.log(`✅ Email and phone are available for ${userRole} registration`);
+// Send Password Reset Email
+const sendPasswordResetEmail = async (to, otp, name = 'User') => {
+  try {
+    const mailOptions = {
+      from: {
+        name: 'HashView',
+        address: process.env.FROM_EMAIL || process.env.SMTP_USER
+      },
+      to: to,
+      subject: 'HashView - Password Reset Code',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f3f4f6;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 20px;">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                  
+                  <tr>
+                    <td style="background: linear-gradient(135deg, #2D1B69 0%, #4F46E5 100%); padding: 40px 20px; text-align: center;">
+                      <h1 style="color: #ffffff; margin: 0; font-size: 32px; font-weight: bold;">#HashView</h1>
+                    </td>
+                  </tr>
+                  
+                  <tr>
+                    <td style="padding: 40px 30px;">
+                      <h2 style="color: #2D1B69; margin: 0 0 20px 0;">Password Reset Request</h2>
+                      
+                      <p style="color: #6b7280; font-size: 16px; margin: 0 0 20px 0;">Hello ${name},</p>
+                      
+                      <p style="color: #6b7280; font-size: 16px; margin: 0 0 30px 0;">
+                        We received a request to reset your password. Use the code below:
+                      </p>
+                      
+                      <table width="100%" cellpadding="0" cellspacing="0" style="margin: 0 0 30px 0;">
+                        <tr>
+                          <td style="background: #FFF7ED; padding: 30px; border-radius: 12px; text-align: center; border: 2px dashed #FF8C00;">
+                            <h1 style="color: #FF8C00; font-size: 42px; font-weight: bold; margin: 0; letter-spacing: 12px;">${otp}</h1>
+                          </td>
+                        </tr>
+                      </table>
+                      
+                      <p style="color: #ef4444; font-size: 14px; margin: 0 0 20px 0;">
+                        ⚠️ This code expires in 10 minutes.
+                      </p>
+                      
+                      <p style="color: #6b7280; font-size: 14px; margin: 0;">
+                        If you didn't request this, please ignore this email.
+                      </p>
+                    </td>
+                  </tr>
+                  
+                  <tr>
+                    <td style="background-color: #f9fafb; padding: 20px; text-align: center;">
+                      <p style="color: #9ca3af; font-size: 12px; margin: 0;">© 2025 HashView. All rights reserved.</p>
+                    </td>
+                  </tr>
+                  
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `
+    };
 
-    let user;
-    let token;
-
-    // Create business owner in separate collection
-    if (userRole === 'business') {
-      console.log('Creating business owner with data:', { name, email, phone, role: userRole });
-      user = await BusinessOwner.create({
-        name,
-        email: email.toLowerCase(),
-        phone,
-        passwordHash: password,
-        role: 'business'
-      });
-      console.log('✅ Business owner created successfully:', user._id);
-      
-      // Generate token with userType to identify collection
-      token = generateToken(user._id, 'business');
+    // Use Brevo API if available, otherwise use SMTP
+    if (useBrevoAPI) {
+      return await sendViaBrevoAPI(mailOptions);
     } else {
-      // Create customer in User collection
-      console.log('Creating customer with data:', { name, email, phone, role: userRole });
-      user = await User.create({
-        name,
-        email: email.toLowerCase(),
-        phone,
-        passwordHash: password,
-        role: userRole
-      });
-      console.log('✅ Customer created successfully:', user._id);
-      
-      // Generate token with userType
-      token = generateToken(user._id, 'customer');
+      const info = await transporter.sendMail(mailOptions);
+      logger.info(`✅ Password reset email sent to ${to}`);
+      return info;
     }
-
-    // Welcome message (email sending can be added later if needed)
-    logger.info(`New user registered: ${email} as ${userRole}`);
-
-    res.status(201).json({
-      success: true,
-      message: 'User registered successfully',
-      token,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        profileImage: user.profileImage,
-        emailVerified: user.emailVerified,
-        phoneVerified: user.phoneVerified
-      }
-    });
   } catch (error) {
-    console.error('❌ Registration error:', error.message);
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(e => e.message);
-      console.error('Validation errors:', errors);
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors
-      });
-    }
-    next(error);
+    logger.error('❌ Error sending password reset email:', error);
+    throw error;
   }
 };
 
-// @desc    Login user
-// @route   POST /api/auth/login
-// @access  Public
-exports.login = async (req, res, next) => {
-  try {
-    const { email, password, role } = req.body;
-
-    console.log('\n🔐 Login attempt:', { email, requestedRole: role });
-
-    let user = null;
-    let userType = null;
-
-    // If role is specified, search in the appropriate collection first
-    if (role === 'business') {
-      // Try BusinessOwner collection first (with businesses populated)
-      user = await BusinessOwner.findOne({ email }).select('+passwordHash').populate('businesses');
-      if (user) {
-        userType = 'business';
-        console.log(`✅ Found business account for ${email}`);
-      } else {
-        // Fallback to User collection (in case admin/customer trying business login)
-        user = await User.findOne({ email }).select('+passwordHash');
-        if (user) {
-          userType = user.role === 'admin' ? 'admin' : 'customer';
-          console.log(`⚠️  Found ${userType} account for ${email}, but business login was requested`);
-        }
-      }
-    } else {
-      // Try User collection first (customer or admin)
-      user = await User.findOne({ email }).select('+passwordHash');
-      
-      if (user) {
-        userType = user.role === 'admin' ? 'admin' : 'customer';
-        console.log(`✅ Found ${userType} account for ${email}`);
-      } else {
-        // Fallback to BusinessOwner collection (with businesses populated)
-        user = await BusinessOwner.findOne({ email }).select('+passwordHash').populate('businesses');
-        if (user) {
-          userType = 'business';
-          console.log(`⚠️  Found business account for ${email}, but customer login was requested`);
-        }
-      }
-    }
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
-    }
-
-    // Check if email is suspended
-    const suspendedAccount = await SuspendedAccount.findOne({ 
-      email: email.toLowerCase(), 
-      status: 'suspended' 
-    });
-
-    if (suspendedAccount) {
-      console.log(`❌ Login blocked: Account is suspended`);
-      return res.status(403).json({
-        success: false,
-        message: 'This account has been suspended. Please contact support for assistance.',
-        reason: suspendedAccount.reason
-      });
-    }
-
-    // Check password
-    const isPasswordMatch = await user.comparePassword(password);
-    
-    if (!isPasswordMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
-    }
-
-    // Check if account is active
-    if (user.status !== 'active') {
-      return res.status(403).json({
-        success: false,
-        message: 'Account is not active. Please contact support.'
-      });
-    }
-
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
-
-    // Generate token with userType
-    const token = generateToken(user._id, userType);
-
-    res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      token,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        profileImage: user.profileImage,
-        emailVerified: user.emailVerified,
-        phoneVerified: user.phoneVerified,
-        ...(user.role === 'business' && user.businesses && { businesses: user.businesses })
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
+// Export functions
+module.exports = {
+  sendOTPEmail,
+  sendPasswordResetEmail
 };
-
-// @desc    Send OTP for phone login
-// @route   POST /api/auth/send-otp
-// @access  Public
-exports.sendOTP = async (req, res, next) => {
-  try {
-    const { phone } = req.body;
-
-    // Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-    // Store OTP with 5 minute expiry
-    otpStore.set(phone, {
-      otp,
-      expiresAt: Date.now() + 5 * 60 * 1000
-    });
-
-    // In production, send OTP via SMS service (Twilio, etc.)
-    logger.info(`OTP for ${phone}: ${otp}`);
-
-    res.status(200).json({
-      success: true,
-      message: 'OTP sent successfully',
-      // Only for development - remove in production
-      otp: process.env.NODE_ENV === 'development' ? otp : undefined
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Login with phone and OTP
-// @route   POST /api/auth/login-phone
-// @access  Public
-exports.loginWithPhone = async (req, res, next) => {
-  try {
-    const { phone, otp } = req.body;
-
-    // Verify OTP
-    const storedOTP = otpStore.get(phone);
-    
-    if (!storedOTP) {
-      return res.status(400).json({
-        success: false,
-        message: 'OTP not found or expired'
-      });
-    }
-
-    if (Date.now() > storedOTP.expiresAt) {
-      otpStore.delete(phone);
-      return res.status(400).json({
-        success: false,
-        message: 'OTP expired'
-      });
-    }
-
-    if (storedOTP.otp !== otp) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid OTP'
-      });
-    }
-
-    // Find user in both collections
-    let user = await User.findOne({ phone });
-    let userType = 'customer';
-    
-    if (!user) {
-      user = await BusinessOwner.findOne({ phone });
-      if (user) {
-        userType = 'business';
-      }
-    }
-    
-    if (!user) {
-      // Create new customer with phone
-      user = await User.create({
-        name: 'User',
-        email: `${phone}@hashview.temp`,
-        phone,
-        passwordHash: crypto.randomBytes(16).toString('hex'),
-        phoneVerified: true,
-        role: 'customer'
-      });
-      userType = 'customer';
-    } else {
-      user.phoneVerified = true;
-      user.lastLogin = new Date();
-      await user.save();
-    }
-
-    // Delete OTP after successful login
-    otpStore.delete(phone);
-
-    // Generate token with userType
-    const token = generateToken(user._id, userType);
-
-    res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      token,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        profileImage: user.profileImage,
-        emailVerified: user.emailVerified,
-        phoneVerified: user.phoneVerified
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Forgot password
-// @route   POST /api/auth/forgot-password
-// @access  Public
-exports.forgotPassword = async (req, res, next) => {
-  try {
-    const { email } = req.body;
-
-    const user = await User.findOne({ email });
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found with this email'
-      });
-    }
-
-    // Generate reset token
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    user.resetPasswordToken = crypto
-      .createHash('sha256')
-      .update(resetToken)
-      .digest('hex');
-    user.resetPasswordExpire = Date.now() + 60 * 60 * 1000; // 1 hour
-
-    await user.save();
-
-    // Note: This function is not used in current flow
-    // Password reset uses OTP via sendEmailOTP function instead
-    logger.info(`Password reset requested for ${email}`);
-
-    res.status(200).json({
-      success: true,
-      message: 'Password reset email sent',
-      // Only for development
-      resetToken: process.env.NODE_ENV === 'development' ? resetToken : undefined
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Reset password
-// @route   POST /api/auth/reset-password
-// @access  Public
-exports.resetPassword = async (req, res, next) => {
-  try {
-    const { token, password } = req.body;
-
-    // Hash token
-    const hashedToken = crypto
-      .createHash('sha256')
-      .update(token)
-      .digest('hex');
-
-    // Find user with valid token
-    const user = await User.findOne({
-      resetPasswordToken: hashedToken,
-      resetPasswordExpire: { $gt: Date.now() }
-    });
-
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid or expired reset token'
-      });
-    }
-
-    // Update password
-    user.passwordHash = password;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpire = undefined;
-    await user.save();
-
-    // Generate new token
-    const authToken = generateToken(user._id);
-
-    res.status(200).json({
-      success: true,
-      message: 'Password reset successful',
-      token: authToken
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Get current user
-// @route   GET /api/auth/me
-// @access  Private
-exports.getMe = async (req, res, next) => {
-  try {
-    // req.user is already populated by the auth middleware
-    // It contains the user from the correct collection (User or BusinessOwner)
-    const user = req.user;
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    // Return user data based on their role
-    res.status(200).json({
-      success: true,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        profileImage: user.profileImage,
-        emailVerified: user.emailVerified,
-        phoneVerified: user.phoneVerified,
-        status: user.status,
-        createdAt: user.createdAt,
-        // Include business-specific fields if it's a business owner
-        ...(user.role === 'business' && { businesses: user.businesses }),
-        // Include customer-specific fields if it's a customer
-        ...(user.role === 'customer' && { location: user.location })
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Update push token
-// @route   PUT /api/auth/push-token
-// @access  Private
-exports.updatePushToken = async (req, res, next) => {
-  try {
-    const { pushToken } = req.body;
-
-    // req.user is already populated by auth middleware with correct user
-    req.user.pushToken = pushToken;
-    await req.user.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Push token updated successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Send email OTP
-// @route   POST /api/auth/send-email-otp
-// @access  Public
-exports.sendEmailOTP = async (req, res, next) => {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is required'
-      });
-    }
-
-    // Normalize email to lowercase
-    const normalizedEmail = email.toLowerCase().trim();
-
-    // Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-    // Store OTP with 10 minute expiry
-    emailOtpStore.set(normalizedEmail, {
-      otp,
-      expiresAt: Date.now() + 10 * 60 * 1000
-    });
-
-    // Send OTP via Email (Brevo API or SMTP)
-    const emailConfigured = process.env.BREVO_API_KEY || 
-                           (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
-    
-    if (emailConfigured) {
-      try {
-        await sendOTPEmail(normalizedEmail, otp);
-        console.log(`\n✅ OTP email sent to: ${normalizedEmail}`);
-      } catch (error) {
-        logger.error('Error sending email OTP:', error);
-        console.error('❌ Failed to send email:', error.message);
-      }
-    } else {
-      console.log('\n⚠️  Email service not configured - Email not sent');
-      console.log('Add BREVO_API_KEY or SMTP credentials to environment variables');
-    }
-
-    // Always log OTP to console for backup/testing
-    console.log(`\n🔐 EMAIL OTP for ${normalizedEmail}: ${otp}`);
-    console.log(`⏰ Expires in 10 minutes`);
-    console.log(`📝 Stored in emailOtpStore with key: ${normalizedEmail}\n`);
-    logger.info(`Email OTP process completed for ${normalizedEmail}`);
-
-    res.status(200).json({
-      success: true,
-      message: 'Verification code sent to your email successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Verify email OTP
-// @route   POST /api/auth/verify-email-otp
-// @access  Public
-exports.verifyEmailOTP = async (req, res, next) => {
-  try {
-    const { email, otp } = req.body;
-
-    if (!email || !otp) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and OTP are required'
-      });
-    }
-
-    // Normalize email to lowercase and trim OTP
-    const normalizedEmail = email.toLowerCase().trim();
-    const normalizedOTP = otp.trim();
-
-    // Debug logging
-    console.log(`\n🔍 Verifying OTP for email: ${normalizedEmail}`);
-    console.log(`🔍 Received OTP: ${normalizedOTP}`);
-    console.log(`🔍 Available OTPs in store:`, Array.from(emailOtpStore.keys()));
-
-    // Verify OTP
-    const storedOTP = emailOtpStore.get(normalizedEmail);
-    
-    if (!storedOTP) {
-      console.log(`❌ No OTP found for email: ${normalizedEmail}\n`);
-      return res.status(400).json({
-        success: false,
-        message: 'OTP not found or expired'
-      });
-    }
-
-    console.log(`🔍 Stored OTP: ${storedOTP.otp}`);
-    console.log(`🔍 Expiry time: ${new Date(storedOTP.expiresAt).toLocaleString()}`);
-
-    if (Date.now() > storedOTP.expiresAt) {
-      console.log(`❌ OTP expired for ${normalizedEmail}\n`);
-      emailOtpStore.delete(normalizedEmail);
-      return res.status(400).json({
-        success: false,
-        message: 'OTP expired'
-      });
-    }
-
-    if (storedOTP.otp !== normalizedOTP) {
-      console.log(`❌ Invalid OTP. Expected: ${storedOTP.otp}, Got: ${normalizedOTP}\n`);
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid OTP'
-      });
-    }
-
-    console.log(`✅ OTP verified successfully for ${normalizedEmail}\n`);
-
-    // Mark as verified for password reset (valid for 5 minutes)
-    emailOtpStore.set(`verified_${normalizedEmail}`, {
-      verified: true,
-      expiresAt: Date.now() + 5 * 60 * 1000
-    });
-
-    // Delete OTP after successful verification
-    emailOtpStore.delete(normalizedEmail);
-
-    // Update user's email verification status if user exists in either collection
-    let user = await User.findOne({ email: normalizedEmail });
-    if (!user) {
-      user = await BusinessOwner.findOne({ email: normalizedEmail });
-    }
-    if (user) {
-      user.emailVerified = true;
-      await user.save();
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'Email verified successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Reset password with OTP
-// @route   POST /api/auth/reset-password-otp
-// @access  Public
-exports.resetPasswordWithOTP = async (req, res, next) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and password are required'
-      });
-    }
-
-    // Normalize email
-    const normalizedEmail = email.toLowerCase().trim();
-
-    // Check if email was verified via OTP
-    const verificationRecord = emailOtpStore.get(`verified_${normalizedEmail}`);
-    
-    if (!verificationRecord) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please verify your email with OTP first'
-      });
-    }
-
-    if (Date.now() > verificationRecord.expiresAt) {
-      emailOtpStore.delete(`verified_${normalizedEmail}`);
-      return res.status(400).json({
-        success: false,
-        message: 'Verification expired. Please request a new OTP'
-      });
-    }
-
-    // Find user in both collections
-    let user = await User.findOne({ email: normalizedEmail }).select('+passwordHash');
-    let userType = 'customer';
-    
-    if (!user) {
-      user = await BusinessOwner.findOne({ email: normalizedEmail }).select('+passwordHash');
-      if (user) {
-        userType = 'business';
-      }
-    }
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    // Update password
-    user.passwordHash = password;
-    await user.save();
-
-    // Clear verification record
-    emailOtpStore.delete(`verified_${normalizedEmail}`);
-
-    // Generate auth token with userType
-    const token = generateToken(user._id, userType);
-
-    console.log(`✅ Password reset successful for ${normalizedEmail}`);
-
-    res.status(200).json({
-      success: true,
-      message: 'Password reset successful',
-      token,
-      user: user.getPublicProfile()
-    });
-  } catch (error) {
-    console.error('❌ Reset password error:', error);
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(e => e.message);
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors
-      });
-    }
-    next(error);
-  }
-};
-
