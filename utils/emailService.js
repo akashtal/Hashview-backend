@@ -1,30 +1,73 @@
 const nodemailer = require('nodemailer');
+const axios = require('axios');
 const logger = require('./logger');
 
-// Create transporter with SMTP configuration (Brevo or any SMTP service)
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: parseInt(process.env.SMTP_PORT) || 587,
-  secure: false, // true for 465, false for other ports
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  },
-  tls: {
-    rejectUnauthorized: false
-  }
-});
+// Check if we should use Brevo API instead of SMTP
+const useBrevoAPI = process.env.BREVO_API_KEY;
 
-// Verify connection
-transporter.verify((error, success) => {
-  if (error) {
-    logger.error('❌ SMTP connection error:', error);
-    console.log('❌ SMTP connection error:', error.message);
-  } else {
-    logger.info('✅ Email service is ready (using ' + process.env.SMTP_HOST + ')');
-    console.log('✅ Email service is ready (using ' + process.env.SMTP_HOST + ')');
+let transporter = null;
+
+if (!useBrevoAPI) {
+  // Fallback to SMTP (only works on paid hosting or localhost)
+  transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT) || 587,
+    secure: false,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    },
+    tls: {
+      rejectUnauthorized: false
+    }
+  });
+
+  // Verify SMTP connection
+  transporter.verify((error, success) => {
+    if (error) {
+      logger.error('❌ SMTP connection error (try using BREVO_API_KEY instead):', error);
+      console.log('❌ SMTP connection error. Consider using Brevo API instead of SMTP.');
+    } else {
+      logger.info('✅ Email service ready (SMTP)');
+      console.log('✅ Email service ready (SMTP)');
+    }
+  });
+} else {
+  logger.info('✅ Email service using Brevo API');
+  console.log('✅ Email service using Brevo API (HTTP)');
+}
+
+// Helper function to send email via Brevo API
+async function sendViaBrevoAPI(mailOptions) {
+  try {
+    const response = await axios.post(
+      'https://api.brevo.com/v3/smtp/email',
+      {
+        sender: {
+          name: mailOptions.from.name,
+          email: mailOptions.from.address
+        },
+        to: [{ email: mailOptions.to }],
+        subject: mailOptions.subject,
+        htmlContent: mailOptions.html
+      },
+      {
+        headers: {
+          'accept': 'application/json',
+          'api-key': process.env.BREVO_API_KEY,
+          'content-type': 'application/json'
+        }
+      }
+    );
+
+    logger.info(`✅ Email sent via Brevo API to ${mailOptions.to}`);
+    console.log(`✅ Email sent via Brevo API to: ${mailOptions.to}`);
+    return { messageId: response.data.messageId };
+  } catch (error) {
+    logger.error('❌ Brevo API error:', error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || 'Failed to send email via Brevo API');
   }
-});
+}
 
 // Send OTP Email
 exports.sendOTPEmail = async (to, otp, name = 'User') => {
@@ -134,13 +177,16 @@ exports.sendOTPEmail = async (to, otp, name = 'User') => {
       `
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    
-    logger.info(`✅ Email sent successfully to ${to}`);
-    console.log(`✅ Email sent to: ${to}`);
-    console.log(`📧 Message ID: ${info.messageId}`);
-    
-    return info;
+    // Use Brevo API if available, otherwise use SMTP
+    if (useBrevoAPI) {
+      return await sendViaBrevoAPI(mailOptions);
+    } else {
+      const info = await transporter.sendMail(mailOptions);
+      logger.info(`✅ Email sent successfully to ${to}`);
+      console.log(`✅ Email sent to: ${to}`);
+      console.log(`📧 Message ID: ${info.messageId}`);
+      return info;
+    }
   } catch (error) {
     logger.error('❌ Error sending email:', error);
     console.error('❌ Error sending email:', error.message);
@@ -220,9 +266,14 @@ exports.sendPasswordResetEmail = async (to, otp, name = 'User') => {
       `
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    logger.info(`✅ Password reset email sent to ${to}`);
-    return info;
+    // Use Brevo API if available, otherwise use SMTP
+    if (useBrevoAPI) {
+      return await sendViaBrevoAPI(mailOptions);
+    } else {
+      const info = await transporter.sendMail(mailOptions);
+      logger.info(`✅ Password reset email sent to ${to}`);
+      return info;
+    }
   } catch (error) {
     logger.error('❌ Error sending password reset email:', error);
     throw error;
