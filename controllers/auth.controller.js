@@ -630,18 +630,21 @@ exports.sendEmailOTP = async (req, res, next) => {
       expiresAt: Date.now() + 10 * 60 * 1000
     });
 
-    // Send OTP via Gmail SMTP
-    if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+    // Send OTP via Email (Brevo API or SMTP)
+    const emailConfigured = process.env.BREVO_API_KEY || 
+                           (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+    
+    if (emailConfigured) {
       try {
         await sendOTPEmail(normalizedEmail, otp);
-        console.log(`\n✅ Real OTP email sent to: ${normalizedEmail}`);
+        console.log(`\n✅ OTP email sent to: ${normalizedEmail}`);
       } catch (error) {
         logger.error('Error sending email OTP:', error);
         console.error('❌ Failed to send email:', error.message);
       }
     } else {
-      console.log('\n⚠️  Gmail credentials not configured - Email not sent');
-      console.log('Add GMAIL_USER and GMAIL_APP_PASSWORD to .env file');
+      console.log('\n⚠️  Email service not configured - Email not sent');
+      console.log('Add BREVO_API_KEY or SMTP credentials to environment variables');
     }
 
     // Always log OTP to console for backup/testing
