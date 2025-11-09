@@ -280,8 +280,36 @@ const sendPasswordResetEmail = async (to, otp, name = 'User') => {
   }
 };
 
+// Generic email sending function
+const sendEmail = async ({ to, subject, html, text }) => {
+  try {
+    const mailOptions = {
+      from: {
+        name: 'HashView',
+        address: process.env.FROM_EMAIL || process.env.SMTP_USER
+      },
+      to: to,
+      subject: subject,
+      html: html,
+      text: text || html.replace(/<[^>]*>/g, '') // Strip HTML tags for text version
+    };
+
+    if (useBrevoAPI) {
+      return await sendViaBrevoAPI(mailOptions);
+    } else {
+      const info = await transporter.sendMail(mailOptions);
+      logger.info(`✅ Email sent to ${to}: ${subject}`);
+      return info;
+    }
+  } catch (error) {
+    logger.error(`❌ Error sending email to ${to}:`, error);
+    throw error;
+  }
+};
+
 // Export functions
 module.exports = {
   sendOTPEmail,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  sendEmail
 };

@@ -233,6 +233,7 @@ exports.handleDiditWebhook = async (req, res, next) => {
         logger.info(`Verification started for business ${businessId}`);
         break;
 
+      case 'status.updated':
       case 'verification.completed':
         // Update document statuses
         documents.forEach(doc => {
@@ -263,13 +264,15 @@ exports.handleDiditWebhook = async (req, res, next) => {
         });
 
         // Update overall KYC status
-        if (status === 'verified') {
+        if (status === 'Approved' || status === 'verified') {
           // Didit verified documents - now awaiting admin approval
           business.kycStatus = 'in_review';
           business.status = 'pending';
-        } else if (status === 'rejected') {
+          logger.info(`✅ KYC status updated to 'in_review' for business ${businessId}`);
+        } else if (status === 'Declined' || status === 'rejected') {
           business.kycStatus = 'rejected';
           business.status = 'rejected';
+          logger.warn(`⚠️  KYC status updated to 'rejected' for business ${businessId}`);
         }
 
         await business.save();

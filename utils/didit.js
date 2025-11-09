@@ -149,23 +149,29 @@ exports.processWebhook = async (webhookData) => {
     }
 
     // Extract data from webhook (Didit may send in different formats)
-    const { event, session_id, sessionId, status, documents, metadata, vendor_data } = webhookData;
+    const { event, webhook_type, session_id, sessionId, status, documents, metadata, vendor_data, decision } = webhookData;
     
     // Didit uses session_id (snake_case), but we use sessionId (camelCase)
     const actualSessionId = session_id || sessionId;
     
     // Get businessId from metadata or vendor_data
     const businessId = metadata?.businessId || vendor_data;
+    
+    // Didit sends webhook_type (e.g. "status.updated") instead of event
+    const actualEvent = event || webhook_type || 'unknown';
+    
+    // Extract documents from decision if present
+    const actualDocuments = documents || decision?.documents || [];
 
-    logger.info(`✅ Webhook processed: event=${event}, sessionId=${actualSessionId}, businessId=${businessId}`);
+    logger.info(`✅ Webhook processed: event=${actualEvent}, status=${status}, sessionId=${actualSessionId}, businessId=${businessId}`);
 
     return {
       success: true,
-      event: event || 'unknown', // verification.started, verification.completed, document.verified, etc.
+      event: actualEvent, // status.updated, verification.started, verification.completed, etc.
       sessionId: actualSessionId,
       businessId: businessId,
       status,
-      documents: documents || [],
+      documents: actualDocuments,
       timestamp: new Date()
     };
 
