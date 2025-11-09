@@ -6,10 +6,18 @@ const {
   getReview,
   updateReview,
   deleteReview,
-  markHelpful
+  markHelpful,
+  getSuspiciousActivities,
+  getFlaggedReviews,
+  clearSuspiciousActivities
 } = require('../controllers/review.controller');
-const { protect, optionalAuth } = require('../middleware/auth.middleware');
+const { protect, optionalAuth, authorize } = require('../middleware/auth.middleware');
 const { validate, schemas } = require('../middleware/validation');
+
+// Admin routes (must be before parameterized routes)
+router.get('/admin/suspicious-activities', protect, authorize('admin'), getSuspiciousActivities);
+router.get('/admin/flagged', protect, authorize('admin'), getFlaggedReviews);
+router.delete('/admin/suspicious-activities', protect, authorize('admin'), clearSuspiciousActivities);
 
 // Public routes
 router.get('/business/:businessId', optionalAuth, getBusinessReviews);

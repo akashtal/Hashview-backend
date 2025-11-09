@@ -4,13 +4,58 @@ const Coupon = require('../models/Coupon.model');
 const { isWithinGeofence } = require('../utils/geolocation');
 const { generateCouponCode, calculateCouponExpiry } = require('../utils/coupon');
 const { sendPushNotification } = require('../utils/notification');
+const logger = require('../utils/logger');
+
+// In-memory suspicious behavior log (in production, use MongoDB collection)
+const suspiciousActivityLog = [];
+
+// Helper function to log suspicious behavior
+async function logSuspiciousBehavior(userId, eventType, metadata) {
+  const logEntry = {
+    userId,
+    eventType,
+    metadata,
+    timestamp: new Date(),
+    ipAddress: metadata.ipAddress || null
+  };
+  
+  // Store in memory (in production, save to database)
+  suspiciousActivityLog.push(logEntry);
+  
+  // Keep only last 1000 entries
+  if (suspiciousActivityLog.length > 1000) {
+    suspiciousActivityLog.shift();
+  }
+  
+  // Log to file
+  logger.warn(`🚨 Suspicious Activity: ${eventType}`, logEntry);
+  
+  // TODO: In production, save to SuspiciousActivity collection
+  // await SuspiciousActivity.create(logEntry);
+  
+  return logEntry;
+}
 
 // @desc    Create review
 // @route   POST /api/reviews
 // @access  Private
 exports.createReview = async (req, res, next) => {
   try {
-    const { business: businessId, rating, comment, latitude, longitude, images } = req.body;
+    const { 
+      business: businessId, 
+      rating, 
+      comment, 
+      latitude, 
+      longitude, 
+      images,
+      // Security metadata from frontend
+      locationAccuracy,
+      verificationTime,
+      motionDetected,
+      isMockLocation,
+      locationHistoryCount,
+      devicePlatform
+    } = req.body;
 
     // Get business
     const business = await Business.findById(businessId);
@@ -29,10 +74,31 @@ exports.createReview = async (req, res, next) => {
       });
     }
 
-    // Check if user already reviewed today
+    // SECURITY CHECK #1: Rate Limiting - Max 5 reviews per day
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
+    const todayReviewCount = await Review.countDocuments({
+      user: req.user.id,
+      createdAt: { $gte: today }
+    });
+
+    if (todayReviewCount >= 5) {
+      console.log(`⚠️ RATE LIMIT: User ${req.user.id} has ${todayReviewCount} reviews today`);
+      
+      // Log suspicious behavior
+      await logSuspiciousBehavior(req.user.id, 'RATE_LIMIT_EXCEEDED', {
+        reviewCount: todayReviewCount,
+        businessId: businessId
+      });
+      
+      return res.status(429).json({
+        success: false,
+        message: 'Review limit reached. You can post maximum 5 reviews per day. This helps maintain review quality.'
+      });
+    }
+
+    // SECURITY CHECK #2: Duplicate review check (same business, today)
     const existingReview = await Review.findOne({
       user: req.user.id,
       business: businessId,
@@ -44,6 +110,65 @@ exports.createReview = async (req, res, next) => {
         success: false,
         message: 'You have already reviewed this business today'
       });
+    }
+
+    // SECURITY CHECK #3: Mock Location Detection
+    if (isMockLocation === true) {
+      console.warn(`⚠️ MOCK LOCATION: User ${req.user.id} attempted review with mock GPS`);
+      
+      await logSuspiciousBehavior(req.user.id, 'MOCK_LOCATION_DETECTED', {
+        businessId: businessId,
+        latitude: latitude,
+        longitude: longitude,
+        platform: devicePlatform
+      });
+      
+      return res.status(403).json({
+        success: false,
+        message: 'Mock location detected. Please disable "Fake GPS" apps and use your real location.',
+        errorCode: 'MOCK_LOCATION'
+      });
+    }
+
+    // SECURITY CHECK #4: GPS Accuracy Validation
+    const MAX_ACCURACY = 50; // 50 meters
+    if (locationAccuracy && locationAccuracy > MAX_ACCURACY) {
+      console.warn(`⚠️ POOR GPS: User ${req.user.id} accuracy: ${locationAccuracy}m`);
+      
+      await logSuspiciousBehavior(req.user.id, 'POOR_GPS_ACCURACY', {
+        businessId: businessId,
+        accuracy: locationAccuracy,
+        threshold: MAX_ACCURACY
+      });
+      
+      return res.status(400).json({
+        success: false,
+        message: `GPS accuracy too low (${Math.round(locationAccuracy)}m). Please move to an open area for better signal.`,
+        errorCode: 'POOR_ACCURACY'
+      });
+    }
+
+    // SECURITY CHECK #5: Verification Time Check (optional, just log if suspicious)
+    if (verificationTime && verificationTime < 10) {
+      console.warn(`⚠️ QUICK REVIEW: User ${req.user.id} verification time: ${verificationTime}s`);
+      
+      await logSuspiciousBehavior(req.user.id, 'QUICK_SUBMISSION', {
+        businessId: businessId,
+        verificationTime: verificationTime,
+        flagForReview: true
+      });
+      // Don't block, but flag for manual review
+    }
+
+    // SECURITY CHECK #6: Location History Check
+    if (!locationHistoryCount || locationHistoryCount < 2) {
+      console.warn(`⚠️ SINGLE LOCATION: User ${req.user.id} submitted with minimal location updates`);
+      
+      await logSuspiciousBehavior(req.user.id, 'MINIMAL_LOCATION_HISTORY', {
+        businessId: businessId,
+        historyCount: locationHistoryCount
+      });
+      // Don't block, but flag
     }
 
     // Verify geofencing - user must be within business radius
@@ -82,7 +207,7 @@ exports.createReview = async (req, res, next) => {
     console.log(`   ✅ ALLOWED: User is within geofence`);
 
 
-    // Create review
+    // Create review with security metadata
     const review = await Review.create({
       user: req.user.id,
       business: businessId,
@@ -93,7 +218,27 @@ exports.createReview = async (req, res, next) => {
         coordinates: [longitude, latitude]
       },
       images: images || [],
-      verified: true
+      verified: true,
+      // Store security metadata for audit trail
+      metadata: {
+        locationAccuracy: locationAccuracy,
+        verificationTime: verificationTime,
+        motionDetected: motionDetected,
+        isMockLocation: isMockLocation,
+        locationHistoryCount: locationHistoryCount,
+        devicePlatform: devicePlatform,
+        submittedAt: new Date()
+      }
+    });
+    
+    // Log successful review submission
+    logger.info(`✅ Review created successfully`, {
+      reviewId: review._id,
+      userId: req.user.id,
+      businessId: businessId,
+      distance: actualDistance.toFixed(2),
+      accuracy: locationAccuracy,
+      verificationTime: verificationTime
     });
 
     // Update business rating
@@ -348,6 +493,112 @@ exports.markHelpful = async (req, res, next) => {
     res.status(200).json({
       success: true,
       helpful: review.helpful.length
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get suspicious activities (Admin only)
+// @route   GET /api/reviews/admin/suspicious-activities
+// @access  Private (Admin)
+exports.getSuspiciousActivities = async (req, res, next) => {
+  try {
+    const { limit = 100, eventType } = req.query;
+    
+    let activities = [...suspiciousActivityLog];
+    
+    // Filter by event type if specified
+    if (eventType) {
+      activities = activities.filter(a => a.eventType === eventType);
+    }
+    
+    // Sort by most recent first
+    activities.sort((a, b) => b.timestamp - a.timestamp);
+    
+    // Limit results
+    activities = activities.slice(0, parseInt(limit));
+    
+    // Get summary statistics
+    const stats = {
+      total: suspiciousActivityLog.length,
+      byType: {}
+    };
+    
+    suspiciousActivityLog.forEach(activity => {
+      stats.byType[activity.eventType] = (stats.byType[activity.eventType] || 0) + 1;
+    });
+    
+    res.status(200).json({
+      success: true,
+      count: activities.length,
+      stats,
+      activities
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get flagged reviews for manual review (Admin only)
+// @route   GET /api/reviews/admin/flagged
+// @access  Private (Admin)
+exports.getFlaggedReviews = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+    
+    // Find reviews with suspicious metadata
+    const flaggedReviews = await Review.find({
+      $or: [
+        { 'metadata.verificationTime': { $lt: 10 } }, // Quick submissions
+        { 'metadata.locationAccuracy': { $gt: 50 } }, // Poor GPS
+        { 'metadata.locationHistoryCount': { $lt: 2 } }, // Single location
+        { 'metadata.isMockLocation': true } // Mock location
+      ]
+    })
+      .populate('user', 'name email phone')
+      .populate('business', 'name address')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+    
+    const total = await Review.countDocuments({
+      $or: [
+        { 'metadata.verificationTime': { $lt: 10 } },
+        { 'metadata.locationAccuracy': { $gt: 50 } },
+        { 'metadata.locationHistoryCount': { $lt: 2 } },
+        { 'metadata.isMockLocation': true }
+      ]
+    });
+    
+    res.status(200).json({
+      success: true,
+      count: flaggedReviews.length,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      reviews: flaggedReviews
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Clear suspicious activity log (Admin only)
+// @route   DELETE /api/reviews/admin/suspicious-activities
+// @access  Private (Admin)
+exports.clearSuspiciousActivities = async (req, res, next) => {
+  try {
+    const clearedCount = suspiciousActivityLog.length;
+    suspiciousActivityLog.length = 0; // Clear array
+    
+    logger.info(`🧹 Suspicious activity log cleared by admin (${clearedCount} entries)`);
+    
+    res.status(200).json({
+      success: true,
+      message: `Cleared ${clearedCount} suspicious activity entries`
     });
   } catch (error) {
     next(error);
