@@ -182,25 +182,41 @@ exports.getVerificationStatus = async (req, res, next) => {
 // @access  Public (but signature verified)
 exports.handleDiditWebhook = async (req, res, next) => {
   try {
-    logger.info('Received Didit webhook');
+    logger.info('📥 Received Didit webhook');
+    console.log('📥 Webhook headers:', JSON.stringify(req.headers, null, 2));
+    console.log('📥 Webhook body:', JSON.stringify(req.body, null, 2));
 
     // Process webhook
     const webhookResult = await diditService.processWebhook(req.body);
 
     if (!webhookResult.success) {
+      logger.error('❌ Webhook processing failed:', webhookResult.error);
       return res.status(400).json({
         success: false,
-        message: 'Invalid webhook'
+        message: webhookResult.error || 'Invalid webhook'
       });
     }
 
     const { event, sessionId, businessId, status, documents } = webhookResult;
 
-    // Find business
-    const business = await Business.findById(businessId);
+    // If we can't find businessId from webhook, try to find business by sessionId
+    let business;
+    
+    if (businessId) {
+      business = await Business.findById(businessId);
+    } else if (sessionId) {
+      // Fallback: Find business by Didit session ID
+      business = await Business.findOne({ 
+        $or: [
+          { diditSessionId: sessionId },
+          { 'diditVerification.sessionId': sessionId }
+        ]
+      });
+      logger.info(`🔍 Found business by sessionId: ${business?._id}`);
+    }
 
     if (!business) {
-      logger.error('Business not found for webhook:', businessId);
+      logger.error('❌ Business not found for webhook - businessId:', businessId, 'sessionId:', sessionId);
       return res.status(404).json({
         success: false,
         message: 'Business not found'
