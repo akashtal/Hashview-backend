@@ -183,8 +183,10 @@ exports.getVerificationStatus = async (req, res, next) => {
 exports.handleDiditWebhook = async (req, res, next) => {
   try {
     logger.info('📥 Received Didit webhook');
-    console.log('📥 Webhook headers:', JSON.stringify(req.headers, null, 2));
-    console.log('📥 Webhook body:', JSON.stringify(req.body, null, 2));
+    console.log('📥 Webhook headers:');
+    console.log(JSON.stringify(req.headers, null, 2));
+    console.log('📥 Webhook body:');
+    console.log(JSON.stringify(req.body, null, 2));
 
     // Process webhook
     const webhookResult = await diditService.processWebhook(req.body);

@@ -136,8 +136,10 @@ exports.getVerificationStatus = async (sessionId) => {
 exports.processWebhook = async (webhookData) => {
   try {
     // Log full webhook payload for debugging
-    logger.info('📥 Didit webhook received:', JSON.stringify(webhookData, null, 2));
-    console.log('📥 Full webhook data:', JSON.stringify(webhookData, null, 2));
+    const webhookStr = JSON.stringify(webhookData, null, 2);
+    logger.info(`📥 Didit webhook received: ${webhookStr}`);
+    console.log('📥 Full webhook data:');
+    console.log(webhookStr);
 
     // Verify webhook signature (security)
     const isValid = verifyWebhookSignature(webhookData);
