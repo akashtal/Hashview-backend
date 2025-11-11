@@ -1,7 +1,7 @@
 const Business = require('../models/Business.model');
 const Review = require('../models/Review.model');
 const { generateBusinessQRCode } = require('../utils/qrcode');
-const { getNearbyQuery } = require('../utils/geolocation');
+const { getNearbyQuery, calculateDistance } = require('../utils/geolocation');
 const { syncGoogleRatingsForBusiness } = require('../controllers/externalReviews.controller');
 const { cloudinary } = require('../config/cloudinary');
 
@@ -440,15 +440,33 @@ exports.getAllActiveBusinesses = async (req, res, next) => {
 // @access  Public
 exports.searchBusinesses = async (req, res, next) => {
   try {
-    const { query, category, city, ratingSource, minRating } = req.query;
+    const { 
+      search,        // Real-time search query
+      query,         // Legacy query param (for backward compatibility)
+      category, 
+      city, 
+      ratingSource, 
+      minRating,
+      latitude,      // User's location for distance sorting
+      longitude,
+      limit          // Limit results (for autocomplete)
+    } = req.query;
+    
+    console.log('🔍 Search request:', { search, query, latitude, longitude, limit });
     
     // Show only active businesses for user search
     const searchQuery = { status: 'active' };
 
-    if (query) {
+    // Real-time search by name or location
+    const searchTerm = search || query;
+    if (searchTerm) {
       searchQuery.$or = [
-        { name: { $regex: query, $options: 'i' } },
-        { description: { $regex: query, $options: 'i' } }
+        { name: { $regex: searchTerm, $options: 'i' } },
+        { description: { $regex: searchTerm, $options: 'i' } },
+        { 'address.fullAddress': { $regex: searchTerm, $options: 'i' } },
+        { 'address.city': { $regex: searchTerm, $options: 'i' } },
+        { 'address.area': { $regex: searchTerm, $options: 'i' } },
+        { 'address.state': { $regex: searchTerm, $options: 'i' } }
       ];
     }
 
@@ -474,19 +492,47 @@ exports.searchBusinesses = async (req, res, next) => {
       }
     }
 
-    const businesses = await Business.find(searchQuery)
+    // Fetch businesses
+    let businesses = await Business.find(searchQuery)
       .select('-documents')
-      .sort({ 'rating.average': -1 }) // Sort by highest rated first
-      .limit(50);
+      .limit(parseInt(limit) || 50); // Default 50, or use limit param for autocomplete
+
+    // Calculate distance if user location provided
+    if (latitude && longitude) {
+      const userLat = parseFloat(latitude);
+      const userLon = parseFloat(longitude);
+      
+      // Add distance to each business
+      businesses = businesses.map(business => {
+        const businessLat = business.location.coordinates[1];
+        const businessLon = business.location.coordinates[0];
+        const distance = calculateDistance(userLat, userLon, businessLat, businessLon);
+        
+        return {
+          ...business.toObject(),
+          distance: distance / 1000 // Convert to kilometers
+        };
+      });
+      
+      // Sort by distance (nearest first)
+      businesses.sort((a, b) => a.distance - b.distance);
+    } else {
+      // No location provided, sort by rating
+      businesses.sort((a, b) => (b.rating?.average || 0) - (a.rating?.average || 0));
+    }
+
+    console.log(`✅ Found ${businesses.length} businesses`);
 
     res.status(200).json({
       success: true,
       count: businesses.length,
       businesses,
       filters: {
+        search: searchTerm || null,
         ratingSource: ratingSource || null,
         minRating: minRating || null,
-        category: category || null
+        category: category || null,
+        hasLocation: !!(latitude && longitude)
       }
     });
   } catch (error) {
