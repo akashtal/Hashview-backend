@@ -395,6 +395,8 @@ exports.getAllActiveBusinesses = async (req, res, next) => {
   try {
     const { category, limit, ratingSource, minRating } = req.query;
     
+    console.log('📋 getAllActiveBusinesses request:', { category, ratingSource, minRating, limit });
+    
     const query = { status: 'active' };
     
     if (category && category !== 'all') {
@@ -404,6 +406,8 @@ exports.getAllActiveBusinesses = async (req, res, next) => {
     // Server-side star-based rating filters
     if (ratingSource && minRating) {
       const minRatingValue = parseFloat(minRating);
+      
+      console.log(`   🎯 Applying ${ratingSource} rating filter: ≥${minRatingValue} stars`);
       
       // Filter by specific rating source and star level
       if (ratingSource === 'hashview') {
@@ -415,10 +419,17 @@ exports.getAllActiveBusinesses = async (req, res, next) => {
       }
     }
 
+    console.log('   📊 MongoDB query:', JSON.stringify(query, null, 2));
+
     const businesses = await Business.find(query)
       .select('-documents')
       .limit(parseInt(limit) || 100)
       .sort({ 'rating.average': -1 }); // Sort by highest rated first
+
+    console.log(`   ✅ Found ${businesses.length} businesses`);
+    businesses.forEach((b, i) => {
+      console.log(`      ${i + 1}. ${b.name} - Google: ${b.externalProfiles?.googleBusiness?.rating || 'N/A'}, HashView: ${b.rating?.average || 0}`);
+    });
 
     res.status(200).json({
       success: true,
