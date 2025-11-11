@@ -78,7 +78,17 @@ const schemas = {
     rating: Joi.number().min(1).max(5).required(),
     comment: Joi.string().min(10).max(500).required(),
     latitude: Joi.number().min(-90).max(90).required(),
-    longitude: Joi.number().min(-180).max(180).required()
+    longitude: Joi.number().min(-180).max(180).required(),
+    images: Joi.array().optional(),
+    // 🔒 Comprehensive security metadata (all optional)
+    locationAccuracy: Joi.number().optional(),
+    verificationTime: Joi.number().optional(),
+    motionDetected: Joi.boolean().optional(),
+    isMockLocation: Joi.boolean().optional(),
+    locationHistoryCount: Joi.number().optional(),
+    suspiciousActivities: Joi.array().optional(),
+    deviceFingerprint: Joi.object().optional(),
+    devicePlatform: Joi.string().optional()
   }),
 
   // Business validation
@@ -89,16 +99,28 @@ const schemas = {
     phone: Joi.string().required(),
     category: Joi.string().valid('restaurant', 'cafe', 'retail', 'services', 'healthcare', 'education', 'entertainment', 'salon', 'hotel', 'gym', 'other').required(),
     description: Joi.string().max(500).allow('', null).optional(),
+    // Accept address as string OR structured object OR manual fields
     address: Joi.alternatives().try(
-      Joi.string().required(),
+      Joi.string().allow(''),
       Joi.object({
-        street: Joi.string().required(),
-        city: Joi.string().required(),
-        state: Joi.string().required(),
-        country: Joi.string().required(),
-        zipCode: Joi.string().required()
+        street: Joi.string().optional(),
+        area: Joi.string().optional(),
+        city: Joi.string().optional(),
+        state: Joi.string().optional(),
+        country: Joi.string().optional(),
+        zipCode: Joi.string().optional(),
+        pincode: Joi.string().optional(),
+        landmark: Joi.string().optional(),
+        fullAddress: Joi.string().optional()
       })
-    ).required(),
+    ).optional(),
+    // Manual address fields (sent separately from address object)
+    street: Joi.string().allow('').optional(),
+    area: Joi.string().allow('').optional(),
+    city: Joi.string().allow('').optional(),
+    state: Joi.string().allow('').optional(),
+    pincode: Joi.string().allow('').optional(),
+    landmark: Joi.string().allow('').optional(),
     latitude: Joi.number().min(-90).max(90).required(),
     longitude: Joi.number().min(-180).max(180).required(),
     radius: Joi.number().min(10).max(500).default(50).optional(),

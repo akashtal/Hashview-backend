@@ -66,6 +66,30 @@ const reviewSchema = new mongoose.Schema({
   coupon: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Coupon'
+  },
+  // 🔒 COMPREHENSIVE SECURITY METADATA
+  securityMetadata: {
+    locationAccuracy: Number, // GPS accuracy in meters
+    verificationTime: Number, // Time spent verifying (seconds)
+    motionDetected: Boolean, // Was device movement detected
+    isMockLocation: Boolean, // Was fake GPS detected
+    locationHistoryCount: Number, // Number of location updates during verification
+    suspiciousActivitiesCount: Number, // Number of suspicious events detected
+    deviceFingerprint: {
+      deviceId: String,
+      deviceName: String,
+      manufacturer: String,
+      modelName: String,
+      osName: String,
+      osVersion: String,
+      platform: String,
+      platformVersion: mongoose.Schema.Types.Mixed,
+      isDevice: Boolean
+    },
+    devicePlatform: String, // ios/android
+    actualDistance: Number, // Actual distance from business (meters)
+    businessRadius: Number, // Allowed radius at time of submission
+    submittedAt: Date
   }
 }, {
   timestamps: true

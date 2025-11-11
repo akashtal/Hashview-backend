@@ -2,17 +2,17 @@ const nodemailer = require('nodemailer');
 const axios = require('axios');
 const logger = require('./logger');
 
-// Check if we should use Brevo API instead of SMTP
-const useBrevoAPI = process.env.BREVO_API_KEY;
+// Use Brevo API only in production, Gmail SMTP for development
+const useBrevoAPI = process.env.NODE_ENV === 'production' && process.env.BREVO_API_KEY;
 
 let transporter = null;
 
 if (!useBrevoAPI) {
-  // Fallback to SMTP (only works on paid hosting or localhost)
+  // Gmail SMTP for development
   transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_PORT) || 587,
-    secure: false,
+    secure: false, // Use TLS
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
@@ -25,16 +25,17 @@ if (!useBrevoAPI) {
   // Verify SMTP connection
   transporter.verify((error, success) => {
     if (error) {
-      logger.error('❌ SMTP connection error (try using BREVO_API_KEY instead):', error);
-      console.log('❌ SMTP connection error. Consider using Brevo API instead of SMTP.');
+      logger.error('❌ Gmail SMTP connection error:', error.message);
+      console.log('❌ Gmail SMTP connection error:', error.message);
+      console.log('💡 Make sure you are using Gmail App Password (not regular password)');
     } else {
-      logger.info('✅ Email service ready (SMTP)');
-      console.log('✅ Email service ready (SMTP)');
+      logger.info('✅ Email service ready (Gmail SMTP)');
+      console.log('✅ Email service ready (Gmail SMTP)');
     }
   });
 } else {
-  logger.info('✅ Email service using Brevo API');
-  console.log('✅ Email service using Brevo API (HTTP)');
+  logger.info('✅ Email service using Brevo API (Production)');
+  console.log('✅ Email service using Brevo API (Production)');
 }
 
 // Helper function to send email via Brevo API
@@ -75,7 +76,7 @@ const sendOTPEmail = async (to, otp, name = 'User') => {
     const mailOptions = {
       from: {
         name: 'HashView',
-        address: process.env.FROM_EMAIL || process.env.SMTP_USER
+        address: process.env.SMTP_USER || process.env.FROM_EMAIL
       },
       to: to,
       subject: 'HashView - Email Verification Code',
@@ -200,7 +201,7 @@ const sendPasswordResetEmail = async (to, otp, name = 'User') => {
     const mailOptions = {
       from: {
         name: 'HashView',
-        address: process.env.FROM_EMAIL || process.env.SMTP_USER
+        address: process.env.SMTP_USER || process.env.FROM_EMAIL
       },
       to: to,
       subject: 'HashView - Password Reset Code',
@@ -280,36 +281,8 @@ const sendPasswordResetEmail = async (to, otp, name = 'User') => {
   }
 };
 
-// Generic email sending function
-const sendEmail = async ({ to, subject, html, text }) => {
-  try {
-    const mailOptions = {
-      from: {
-        name: 'HashView',
-        address: process.env.FROM_EMAIL || process.env.SMTP_USER
-      },
-      to: to,
-      subject: subject,
-      html: html,
-      text: text || html.replace(/<[^>]*>/g, '') // Strip HTML tags for text version
-    };
-
-    if (useBrevoAPI) {
-      return await sendViaBrevoAPI(mailOptions);
-    } else {
-      const info = await transporter.sendMail(mailOptions);
-      logger.info(`✅ Email sent to ${to}: ${subject}`);
-      return info;
-    }
-  } catch (error) {
-    logger.error(`❌ Error sending email to ${to}:`, error);
-    throw error;
-  }
-};
-
 // Export functions
 module.exports = {
   sendOTPEmail,
-  sendPasswordResetEmail,
-  sendEmail
+  sendPasswordResetEmail
 };

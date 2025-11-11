@@ -38,10 +38,13 @@ const businessSchema = new mongoose.Schema({
   },
   address: {
     street: String,
+    area: String,  // Locality/Area
     city: String,
     state: String,
-    country: String,
+    country: { type: String, default: 'India' },
     zipCode: String,
+    pincode: String,  // Indian PIN code (alias for zipCode)
+    landmark: String,  // Nearby landmark
     fullAddress: String
   },
   location: {

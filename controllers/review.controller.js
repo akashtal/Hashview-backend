@@ -36,6 +36,75 @@ async function logSuspiciousBehavior(userId, eventType, metadata) {
   return logEntry;
 }
 
+// @desc    Get suspicious activities (Admin only)
+// @route   GET /api/reviews/admin/suspicious-activities
+// @access  Private/Admin
+exports.getSuspiciousActivities = async (req, res, next) => {
+  try {
+    // Return in-memory suspicious activity log
+    const activities = suspiciousActivityLog
+      .sort((a, b) => b.timestamp - a.timestamp) // Most recent first
+      .slice(0, 100); // Last 100 entries
+
+    res.status(200).json({
+      success: true,
+      count: activities.length,
+      total: suspiciousActivityLog.length,
+      activities
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get flagged reviews (Admin only)
+// @route   GET /api/reviews/admin/flagged
+// @access  Private/Admin
+exports.getFlaggedReviews = async (req, res, next) => {
+  try {
+    const flaggedReviews = await Review.find({
+      $or: [
+        { status: 'flagged' },
+        { 'securityMetadata.isMockLocation': true },
+        { 'securityMetadata.suspiciousActivitiesCount': { $gte: 3 } },
+        { 'securityMetadata.locationAccuracy': { $gt: 50 } },
+        { 'securityMetadata.motionDetected': false }
+      ]
+    })
+      .populate('user', 'name email phoneNumber')
+      .populate('business', 'name address')
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.status(200).json({
+      success: true,
+      count: flaggedReviews.length,
+      reviews: flaggedReviews
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Clear suspicious activities log (Admin only)
+// @route   DELETE /api/reviews/admin/suspicious-activities
+// @access  Private/Admin
+exports.clearSuspiciousActivities = async (req, res, next) => {
+  try {
+    const count = suspiciousActivityLog.length;
+    suspiciousActivityLog.length = 0; // Clear array
+    
+    logger.info(`🧹 Suspicious activities log cleared by admin (${count} entries removed)`);
+
+    res.status(200).json({
+      success: true,
+      message: `Cleared ${count} suspicious activity entries`
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc    Create review
 // @route   POST /api/reviews
 // @access  Private
@@ -48,14 +117,29 @@ exports.createReview = async (req, res, next) => {
       latitude, 
       longitude, 
       images,
-      // Security metadata from frontend
+      // 🔒 COMPREHENSIVE SECURITY METADATA from frontend
       locationAccuracy,
       verificationTime,
       motionDetected,
       isMockLocation,
       locationHistoryCount,
+      suspiciousActivities,
+      deviceFingerprint,
       devicePlatform
     } = req.body;
+    
+    console.log('\n🔒 ========== COMPREHENSIVE SECURITY VALIDATION ==========');
+    console.log(`User: ${req.user.id}`);
+    console.log(`Business: ${businessId}`);
+    console.log(`Security Metadata Received:`, {
+      locationAccuracy,
+      verificationTime,
+      motionDetected,
+      isMockLocation,
+      locationHistoryCount,
+      suspiciousActivitiesCount: suspiciousActivities?.length || 0,
+      devicePlatform
+    });
 
     // Get business
     const business = await Business.findById(businessId);
@@ -112,64 +196,7 @@ exports.createReview = async (req, res, next) => {
       });
     }
 
-    // SECURITY CHECK #3: Mock Location Detection
-    if (isMockLocation === true) {
-      console.warn(`⚠️ MOCK LOCATION: User ${req.user.id} attempted review with mock GPS`);
-      
-      await logSuspiciousBehavior(req.user.id, 'MOCK_LOCATION_DETECTED', {
-        businessId: businessId,
-        latitude: latitude,
-        longitude: longitude,
-        platform: devicePlatform
-      });
-      
-      return res.status(403).json({
-        success: false,
-        message: 'Mock location detected. Please disable "Fake GPS" apps and use your real location.',
-        errorCode: 'MOCK_LOCATION'
-      });
-    }
-
-    // SECURITY CHECK #4: GPS Accuracy Validation
-    const MAX_ACCURACY = 50; // 50 meters
-    if (locationAccuracy && locationAccuracy > MAX_ACCURACY) {
-      console.warn(`⚠️ POOR GPS: User ${req.user.id} accuracy: ${locationAccuracy}m`);
-      
-      await logSuspiciousBehavior(req.user.id, 'POOR_GPS_ACCURACY', {
-        businessId: businessId,
-        accuracy: locationAccuracy,
-        threshold: MAX_ACCURACY
-      });
-      
-      return res.status(400).json({
-        success: false,
-        message: `GPS accuracy too low (${Math.round(locationAccuracy)}m). Please move to an open area for better signal.`,
-        errorCode: 'POOR_ACCURACY'
-      });
-    }
-
-    // SECURITY CHECK #5: Verification Time Check (optional, just log if suspicious)
-    if (verificationTime && verificationTime < 10) {
-      console.warn(`⚠️ QUICK REVIEW: User ${req.user.id} verification time: ${verificationTime}s`);
-      
-      await logSuspiciousBehavior(req.user.id, 'QUICK_SUBMISSION', {
-        businessId: businessId,
-        verificationTime: verificationTime,
-        flagForReview: true
-      });
-      // Don't block, but flag for manual review
-    }
-
-    // SECURITY CHECK #6: Location History Check
-    if (!locationHistoryCount || locationHistoryCount < 2) {
-      console.warn(`⚠️ SINGLE LOCATION: User ${req.user.id} submitted with minimal location updates`);
-      
-      await logSuspiciousBehavior(req.user.id, 'MINIMAL_LOCATION_HISTORY', {
-        businessId: businessId,
-        historyCount: locationHistoryCount
-      });
-      // Don't block, but flag
-    }
+    // Frontend metadata removed - doing real validation on backend now!
 
     // Verify geofencing - user must be within business radius
     const businessLat = business.location.coordinates[1];
@@ -198,16 +225,143 @@ exports.createReview = async (req, res, next) => {
 
     if (!withinGeofence) {
       console.log(`   ❌ BLOCKED: User is ${actualDistance.toFixed(2)}m away (limit: ${business.radius}m)`);
-      return res.status(400).json({
+      
+      await logSuspiciousBehavior(req.user.id, 'GEOFENCE_VIOLATION', {
+        businessId: businessId,
+        distance: actualDistance,
+        allowedRadius: business.radius,
+        userLocation: [longitude, latitude],
+        businessLocation: [businessLon, businessLat]
+      });
+      
+      return res.status(403).json({
         success: false,
         message: `You must be within ${business.radius}m of the business to post a review. You are currently ${actualDistance.toFixed(0)}m away.`
       });
     }
     
-    console.log(`   ✅ ALLOWED: User is within geofence`);
+    console.log(`   ✅ PASSED: User is within geofence`);
 
+    // 🔒 COMPREHENSIVE SECURITY VALIDATION
+    
+    // CHECK #3: GPS Accuracy
+    if (locationAccuracy && locationAccuracy > 50) {
+      console.log(`   ❌ BLOCKED: GPS accuracy too low (${locationAccuracy.toFixed(1)}m)`);
+      
+      await logSuspiciousBehavior(req.user.id, 'POOR_GPS_ACCURACY', {
+        businessId: businessId,
+        accuracy: locationAccuracy,
+        threshold: 50
+      });
+      
+      return res.status(400).json({
+        success: false,
+        message: `GPS accuracy is too low (${Math.round(locationAccuracy)}m). Please improve your GPS signal and try again.`
+      });
+    }
+    console.log(`   ✅ PASSED: GPS accuracy good (${locationAccuracy?.toFixed(1) || 'N/A'}m)`);
 
-    // Create review with security metadata
+    // CHECK #4: Verification Time (30 seconds required)
+    if (verificationTime !== undefined && verificationTime !== 30) {
+      console.log(`   ⚠️ WARNING: Verification time mismatch (${verificationTime}s instead of 30s)`);
+      
+      await logSuspiciousBehavior(req.user.id, 'VERIFICATION_TIME_MISMATCH', {
+        businessId: businessId,
+        verificationTime: verificationTime,
+        expected: 30
+      });
+      
+      // Don't block, but flag for review
+    }
+
+    // CHECK #5: Motion Detection (removed - not required for submission)
+    // We still log it for analytics, but don't block reviews
+    if (motionDetected !== undefined) {
+      console.log(`   ℹ️ Motion detected: ${motionDetected} (informational only)`);
+    }
+
+    // CHECK #6: Mock Location Detection
+    if (isMockLocation === true) {
+      console.log(`   ❌ BLOCKED: Mock/fake GPS detected`);
+      
+      await logSuspiciousBehavior(req.user.id, 'MOCK_LOCATION_DETECTED', {
+        businessId: businessId,
+        devicePlatform: devicePlatform
+      });
+      
+      return res.status(403).json({
+        success: false,
+        message: 'Mock/fake GPS location detected. Please disable any location spoofing apps and use your real GPS location.'
+      });
+    }
+    console.log(`   ✅ PASSED: Real GPS location`);
+
+    // CHECK #7: Location History (teleportation detection)
+    if (locationHistoryCount !== undefined && locationHistoryCount < 5) {
+      console.log(`   ⚠️ WARNING: Insufficient location history (${locationHistoryCount} points)`);
+      
+      await logSuspiciousBehavior(req.user.id, 'INSUFFICIENT_LOCATION_HISTORY', {
+        businessId: businessId,
+        locationHistoryCount: locationHistoryCount
+      });
+      
+      // Could indicate quick submission without proper verification
+    }
+
+    // CHECK #8: Suspicious Activities from Frontend
+    if (suspiciousActivities && suspiciousActivities.length > 0) {
+      console.log(`   ⚠️ WARNING: ${suspiciousActivities.length} suspicious activities detected`);
+      
+      suspiciousActivities.forEach((activity, index) => {
+        console.log(`      ${index + 1}. ${activity.type}:`, activity.metadata);
+      });
+      
+      // Log all suspicious activities
+      for (const activity of suspiciousActivities) {
+        await logSuspiciousBehavior(req.user.id, `FRONTEND_${activity.type}`, {
+          businessId: businessId,
+          ...activity.metadata,
+          timestamp: activity.timestamp
+        });
+      }
+      
+      // If too many suspicious activities, block the review
+      if (suspiciousActivities.length >= 3) {
+        console.log(`   ❌ BLOCKED: Too many suspicious activities (${suspiciousActivities.length})`);
+        
+        return res.status(403).json({
+          success: false,
+          message: 'Multiple security concerns detected. Your submission has been flagged for review by our team.'
+        });
+      }
+    }
+
+    // CHECK #9: Device Fingerprint (for analytics & fraud detection)
+    if (deviceFingerprint) {
+      console.log(`   📱 Device: ${deviceFingerprint.manufacturer} ${deviceFingerprint.modelName} (${deviceFingerprint.osName} ${deviceFingerprint.osVersion})`);
+      
+      // Check if same device submitted multiple reviews today
+      const sameDeviceReviews = await Review.countDocuments({
+        user: req.user.id,
+        'securityMetadata.deviceFingerprint.deviceId': deviceFingerprint.deviceId,
+        createdAt: { $gte: today }
+      });
+      
+      if (sameDeviceReviews >= 3) {
+        console.log(`   ⚠️ WARNING: Same device used for ${sameDeviceReviews} reviews today`);
+        
+        await logSuspiciousBehavior(req.user.id, 'MULTIPLE_DEVICE_REVIEWS', {
+          businessId: businessId,
+          deviceId: deviceFingerprint.deviceId,
+          reviewCount: sameDeviceReviews
+        });
+      }
+    }
+
+    console.log('========================================================');
+    console.log(`✅ ALL SECURITY CHECKS PASSED - Creating review\n`);
+
+    // Create review with comprehensive security metadata
     const review = await Review.create({
       user: req.user.id,
       business: businessId,
@@ -219,14 +373,18 @@ exports.createReview = async (req, res, next) => {
       },
       images: images || [],
       verified: true,
-      // Store security metadata for audit trail
-      metadata: {
+      // Store all security metadata for auditing
+      securityMetadata: {
         locationAccuracy: locationAccuracy,
         verificationTime: verificationTime,
         motionDetected: motionDetected,
         isMockLocation: isMockLocation,
         locationHistoryCount: locationHistoryCount,
+        suspiciousActivitiesCount: suspiciousActivities?.length || 0,
+        deviceFingerprint: deviceFingerprint,
         devicePlatform: devicePlatform,
+        actualDistance: actualDistance,
+        businessRadius: business.radius,
         submittedAt: new Date()
       }
     });
@@ -237,8 +395,7 @@ exports.createReview = async (req, res, next) => {
       userId: req.user.id,
       businessId: businessId,
       distance: actualDistance.toFixed(2),
-      accuracy: locationAccuracy,
-      verificationTime: verificationTime
+      businessRadius: business.radius
     });
 
     // Update business rating

@@ -16,7 +16,8 @@ exports.registerBusiness = async (req, res, next) => {
 
     const {
       name, ownerName, email, phone, category, description,
-      address, latitude, longitude, radius,
+      address, street, area, city, state, pincode, landmark,  // Manual address fields
+      latitude, longitude, radius,
       website, tripAdvisorLink, googleBusinessName, openingHours
     } = req.body;
 
@@ -43,15 +44,49 @@ exports.registerBusiness = async (req, res, next) => {
       radius: radius || 50
     };
 
-    // Handle address - if it's a simple string or structured object
-    if (typeof address === 'string') {
+    // Handle address - support manual fields OR structured object OR simple string
+    if (street || area || city || state || pincode || landmark) {
+      // Manual address fields provided from form
+      const addressParts = [];
+      if (street) addressParts.push(street);
+      if (area) addressParts.push(area);
+      if (city) addressParts.push(city);
+      if (state) addressParts.push(state);
+      if (pincode) addressParts.push(pincode);
+      if (landmark) addressParts.push(`Near: ${landmark}`);
+      
       businessData.address = {
-        fullAddress: address
+        street: street || '',
+        area: area || '',
+        city: city || '',
+        state: state || '',
+        pincode: pincode || '',
+        zipCode: pincode || '',  // Use pincode as zipCode
+        landmark: landmark || '',
+        country: 'India',
+        fullAddress: address || addressParts.join(', ')  // Use address if provided, otherwise combine parts
       };
-    } else {
+    } else if (typeof address === 'string') {
+      // Simple string address
+      businessData.address = {
+        fullAddress: address,
+        country: 'India'
+      };
+    } else if (address && typeof address === 'object') {
+      // Structured address object
       businessData.address = {
         ...address,
-        fullAddress: address.fullAddress || `${address.street}, ${address.city}, ${address.state}, ${address.country} ${address.zipCode}`
+        pincode: address.pincode || address.zipCode,
+        zipCode: address.zipCode || address.pincode,
+        country: address.country || 'India',
+        fullAddress: address.fullAddress || 
+          `${address.street || ''}, ${address.area || ''}, ${address.city || ''}, ${address.state || ''}, ${address.pincode || address.zipCode || ''}`.replace(/, ,/g, ',').replace(/^, |, $/g, '')
+      };
+    } else {
+      // No address provided - use empty structure
+      businessData.address = {
+        fullAddress: '',
+        country: 'India'
       };
     }
 
