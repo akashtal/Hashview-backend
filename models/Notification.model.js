@@ -14,13 +14,28 @@ const notificationSchema = new mongoose.Schema({
   },
   sentTo: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    refPath: 'sentToModel',
     required: true
+  },
+  sentToModel: {
+    type: String,
+    enum: ['User', 'BusinessOwner'],
+    default: 'User'
+  },
+  sentBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
   },
   type: {
     type: String,
-    enum: ['general', 'coupon', 'review', 'business_verification', 'kyc', 'system'],
+    enum: ['general', 'coupon', 'review', 'business_verification', 'kyc', 'system', 'admin_broadcast', 'promotion', 'announcement'],
     default: 'general'
+  },
+  recipientType: {
+    type: String,
+    enum: ['all_users', 'all_businesses', 'specific_user', 'specific_business', 'individual'],
+    default: 'individual'
   },
   data: {
     type: mongoose.Schema.Types.Mixed,

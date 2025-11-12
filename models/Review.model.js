@@ -27,6 +27,12 @@ const reviewSchema = new mongoose.Schema({
     url: String,
     publicId: String
   }],
+  videos: [{
+    url: String,
+    publicId: String,
+    thumbnail: String, // Video thumbnail URL
+    duration: Number // Video duration in seconds
+  }],
   geolocation: {
     type: {
       type: String,

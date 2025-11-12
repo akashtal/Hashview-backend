@@ -4,7 +4,9 @@ const {
   uploadBusinessLogo,
   uploadBusinessCover,
   uploadBusinessDocuments,
-  uploadBusinessGallery
+  uploadBusinessGallery,
+  uploadReviewPhotos,
+  uploadReviewVideos
 } = require('../config/cloudinary');
 
 // @desc    Upload profile image
@@ -279,4 +281,95 @@ exports.getUploadStats = async (req, res, next) => {
     next(error);
   }
 };
+
+// @desc    Upload review photos
+// @route   POST /api/upload/review/photos
+// @access  Private
+exports.uploadReviewPhotos = [
+  uploadReviewPhotos.array('photos', 5), // Max 5 photos per review
+  async (req, res, next) => {
+    try {
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please upload at least one photo'
+        });
+      }
+
+      const uploadedPhotos = req.files.map(file => ({
+        url: file.path,
+        publicId: file.filename
+      }));
+
+      console.log(`✅ ${uploadedPhotos.length} review photo(s) uploaded to Cloudinary`);
+
+      res.status(200).json({
+        success: true,
+        message: `${uploadedPhotos.length} photo(s) uploaded successfully`,
+        count: uploadedPhotos.length,
+        photos: uploadedPhotos
+      });
+    } catch (error) {
+      console.error('❌ Error uploading review photos:', error);
+      // Delete uploaded files if processing fails
+      if (req.files && req.files.length > 0) {
+        for (const file of req.files) {
+          try {
+            await cloudinary.uploader.destroy(file.filename);
+          } catch (destroyError) {
+            console.error('Error deleting failed upload:', destroyError);
+          }
+        }
+      }
+      next(error);
+    }
+  }
+];
+
+// @desc    Upload review videos
+// @route   POST /api/upload/review/videos
+// @access  Private
+exports.uploadReviewVideos = [
+  uploadReviewVideos.array('videos', 2), // Max 2 videos per review
+  async (req, res, next) => {
+    try {
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please upload at least one video'
+        });
+      }
+
+      const uploadedVideos = req.files.map(file => ({
+        url: file.path,
+        publicId: file.filename,
+        duration: file.duration || null,
+        // Cloudinary generates thumbnail automatically for videos
+        thumbnail: file.path.replace(/\.(mp4|mov|avi|wmv|flv|webm)$/i, '.jpg')
+      }));
+
+      console.log(`✅ ${uploadedVideos.length} review video(s) uploaded to Cloudinary`);
+
+      res.status(200).json({
+        success: true,
+        message: `${uploadedVideos.length} video(s) uploaded successfully`,
+        count: uploadedVideos.length,
+        videos: uploadedVideos
+      });
+    } catch (error) {
+      console.error('❌ Error uploading review videos:', error);
+      // Delete uploaded files if processing fails
+      if (req.files && req.files.length > 0) {
+        for (const file of req.files) {
+          try {
+            await cloudinary.uploader.destroy(file.filename, { resource_type: 'video' });
+          } catch (destroyError) {
+            console.error('Error deleting failed upload:', destroyError);
+          }
+        }
+      }
+      next(error);
+    }
+  }
+];
 

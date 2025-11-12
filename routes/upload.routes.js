@@ -6,6 +6,8 @@ const {
   uploadBusinessCover,
   uploadBusinessDocuments,
   uploadBusinessGallery,
+  uploadReviewPhotos,
+  uploadReviewVideos,
   deleteFile,
   getUploadStats
 } = require('../controllers/upload.controller');
@@ -19,6 +21,10 @@ router.post('/business/logo', protect, authorize('business'), uploadBusinessLogo
 router.post('/business/cover', protect, authorize('business'), uploadBusinessCover);
 router.post('/business/documents', protect, authorize('business'), uploadBusinessDocuments);
 router.post('/business/gallery', protect, authorize('business'), uploadBusinessGallery);
+
+// Review media uploads (customers only)
+router.post('/review/photos', protect, uploadReviewPhotos);
+router.post('/review/videos', protect, uploadReviewVideos);
 
 // Delete file (owner or admin)
 router.delete('/:publicId', protect, deleteFile);

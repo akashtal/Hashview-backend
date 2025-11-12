@@ -106,10 +106,23 @@ exports.protect = async (req, res, next) => {
 // Grant access to specific roles
 exports.authorize = (...roles) => {
   return (req, res, next) => {
+    console.log('🔐 Authorization Check:');
+    console.log('   Required roles:', roles);
+    console.log('   User role:', req.user?.role);
+    console.log('   User ID:', req.user?.id || req.user?._id);
+    console.log('   User type:', req.user?.constructor?.modelName);
+    
+    if (!req.user || !req.user.role) {
+      return res.status(403).json({
+        success: false,
+        message: 'User role not found. Please log in again.'
+      });
+    }
+    
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
-        message: `User role '${req.user.role}' is not authorized to access this route`
+        message: `User role '${req.user.role}' is not authorized to access this route. Required: ${roles.join(', ')}`
       });
     }
     next();

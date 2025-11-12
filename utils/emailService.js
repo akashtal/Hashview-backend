@@ -1,13 +1,21 @@
 const nodemailer = require('nodemailer');
-const axios = require('axios');
+const { Resend } = require('resend');
 const logger = require('./logger');
 
-// Use Brevo API only in production, Gmail SMTP for development
-const useBrevoAPI = process.env.NODE_ENV === 'production' && process.env.BREVO_API_KEY;
+// Email service: Resend (Production) or Gmail SMTP (Development)
+const useResend = process.env.RESEND_API_KEY;
 
 let transporter = null;
+let resendClient = null;
 
-if (!useBrevoAPI) {
+// Initialize email service
+if (useResend) {
+  // Resend for production
+  resendClient = new Resend(process.env.RESEND_API_KEY);
+  logger.info('✅ Email service using Resend');
+  console.log('✅ Email service using Resend');
+  console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || 'NOT SET');
+} else {
   // Gmail SMTP for development
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -33,40 +41,30 @@ if (!useBrevoAPI) {
       console.log('✅ Email service ready (Gmail SMTP)');
     }
   });
-} else {
-  logger.info('✅ Email service using Brevo API (Production)');
-  console.log('✅ Email service using Brevo API (Production)');
 }
 
-// Helper function to send email via Brevo API
-async function sendViaBrevoAPI(mailOptions) {
+// Helper function to send email via Resend API
+async function sendViaResend(mailOptions) {
   try {
-    const response = await axios.post(
-      'https://api.brevo.com/v3/smtp/email',
-      {
-        sender: {
-          name: mailOptions.from.name,
-          email: mailOptions.from.address
-        },
-        to: [{ email: mailOptions.to }],
-        subject: mailOptions.subject,
-        htmlContent: mailOptions.html
-      },
-      {
-        headers: {
-          'accept': 'application/json',
-          'api-key': process.env.BREVO_API_KEY,
-          'content-type': 'application/json'
-        }
-      }
-    );
+    const { data, error } = await resendClient.emails.send({
+      from: `${mailOptions.from.name} <${mailOptions.from.address}>`,
+      to: [mailOptions.to],
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+    });
 
-    logger.info(`✅ Email sent via Brevo API to ${mailOptions.to}`);
-    console.log(`✅ Email sent via Brevo API to: ${mailOptions.to}`);
-    return { messageId: response.data.messageId };
+    if (error) {
+      logger.error('❌ Resend API error:', error);
+      throw new Error(error.message || 'Failed to send email via Resend');
+    }
+
+    logger.info(`✅ Email sent via Resend to ${mailOptions.to}`);
+    console.log(`✅ Email sent via Resend to: ${mailOptions.to}`);
+    console.log(`📧 Message ID: ${data.id}`);
+    return { messageId: data.id };
   } catch (error) {
-    logger.error('❌ Brevo API error:', error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || 'Failed to send email via Brevo API');
+    logger.error('❌ Resend error:', error.message);
+    throw new Error(error.message || 'Failed to send email via Resend');
   }
 }
 
@@ -178,9 +176,9 @@ const sendOTPEmail = async (to, otp, name = 'User') => {
       `
     };
 
-    // Use Brevo API if available, otherwise use SMTP
-    if (useBrevoAPI) {
-      return await sendViaBrevoAPI(mailOptions);
+    // Use Resend or Gmail SMTP
+    if (useResend) {
+      return await sendViaResend(mailOptions);
     } else {
       const info = await transporter.sendMail(mailOptions);
       logger.info(`✅ Email sent successfully to ${to}`);
@@ -267,9 +265,9 @@ const sendPasswordResetEmail = async (to, otp, name = 'User') => {
       `
     };
 
-    // Use Brevo API if available, otherwise use SMTP
-    if (useBrevoAPI) {
-      return await sendViaBrevoAPI(mailOptions);
+    // Use Resend or Gmail SMTP
+    if (useResend) {
+      return await sendViaResend(mailOptions);
     } else {
       const info = await transporter.sendMail(mailOptions);
       logger.info(`✅ Password reset email sent to ${to}`);

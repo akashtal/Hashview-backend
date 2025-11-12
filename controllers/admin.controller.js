@@ -4,6 +4,7 @@ const BusinessOwner = require('../models/BusinessOwner.model');
 const SuspendedAccount = require('../models/SuspendedAccount.model');
 const Review = require('../models/Review.model');
 const Coupon = require('../models/Coupon.model');
+const Notification = require('../models/Notification.model');
 const { sendPushNotification, sendBulkNotifications } = require('../utils/notification');
 const { sendEmail } = require('../utils/emailService');
 const { generateBusinessQRCode } = require('../utils/qrcode');
@@ -748,43 +749,190 @@ exports.updateReviewStatus = async (req, res, next) => {
   }
 };
 
-// @desc    Send push notification
+// @desc    Send push notification (ENHANCED - Full Admin Control)
 // @route   POST /api/admin/notifications/send
 // @access  Private (Admin)
 exports.sendNotification = async (req, res, next) => {
   try {
-    const { title, message, userIds, sendToAll } = req.body;
+    const { 
+      title, 
+      message, 
+      recipientType,    // 'user', 'business', 'all_users', 'all_businesses', 'specific_user', 'specific_business'
+      recipientIds,     // Array of user/business IDs (for specific recipients)
+      data              // Optional data payload for the notification
+    } = req.body;
 
-    if (sendToAll) {
-      // Send to all users
-      const users = await User.find({ pushToken: { $exists: true, $ne: null } })
-        .select('_id');
-      
-      const allUserIds = users.map(u => u._id);
-      
-      const results = await sendBulkNotifications(allUserIds, title, message);
+    console.log('📢 Admin notification request:', { title, message, recipientType, recipientIds });
 
-      res.status(200).json({
-        success: true,
-        message: `Notifications sent to ${allUserIds.length} users`,
-        results
-      });
-    } else if (userIds && userIds.length > 0) {
-      // Send to specific users
-      const results = await sendBulkNotifications(userIds, title, message);
-
-      res.status(200).json({
-        success: true,
-        message: `Notifications sent to ${userIds.length} users`,
-        results
-      });
-    } else {
+    if (!title || !message) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide userIds or set sendToAll to true'
+        message: 'Title and message are required'
       });
     }
+
+    let sentCount = 0;
+    let recipientList = [];
+    
+    // Load BusinessOwner model once (used in multiple cases)
+    const BusinessOwner = require('../models/BusinessOwner.model');
+
+    switch (recipientType) {
+      case 'all_users':
+        // Get ALL active users (not just those with push tokens)
+        const allUsers = await User.find({ 
+          role: 'customer',
+          status: 'active'
+        }).select('_id pushToken');
+        
+        console.log(`   📊 Found ${allUsers.length} total active users`);
+        
+        recipientList = allUsers.map(u => u._id);
+        
+        // Send push notifications to those with tokens
+        const usersWithTokens = allUsers.filter(u => u.pushToken);
+        console.log(`   📱 ${usersWithTokens.length} users have push tokens`);
+        
+        if (usersWithTokens.length > 0) {
+          const userIdsWithTokens = usersWithTokens.map(u => u._id);
+          await sendBulkNotifications(userIdsWithTokens, title, message, data);
+          console.log(`   ✅ Push notifications sent to ${usersWithTokens.length} users`);
+        }
+        
+        sentCount = recipientList.length;
+        console.log(`   💾 Will save ${sentCount} notification records`);
+        break;
+
+      case 'all_businesses':
+        // Get ALL active business owners (not just those with push tokens)
+        const allBusinessOwners = await BusinessOwner.find({ 
+          status: 'active'
+        }).select('_id pushToken');
+        
+        console.log(`   📊 Found ${allBusinessOwners.length} total active business owners`);
+        
+        recipientList = allBusinessOwners.map(b => b._id);
+        
+        // Send push notifications to those with tokens
+        const ownersWithTokens = allBusinessOwners.filter(o => o.pushToken);
+        console.log(`   📱 ${ownersWithTokens.length} business owners have push tokens`);
+        
+        if (ownersWithTokens.length > 0) {
+          const ownerIdsWithTokens = ownersWithTokens.map(o => o._id);
+          await sendBulkNotifications(ownerIdsWithTokens, title, message, data);
+          console.log(`   ✅ Push notifications sent to ${ownersWithTokens.length} business owners`);
+        }
+        
+        sentCount = recipientList.length;
+        console.log(`   💾 Will save ${sentCount} notification records`);
+        break;
+
+      case 'specific_user':
+        // Send to specific user(s)
+        if (!recipientIds || recipientIds.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Please provide at least one user ID'
+          });
+        }
+        
+        console.log(`   📊 Sending to ${recipientIds.length} specific user(s)`);
+        
+        recipientList = recipientIds;
+        for (const userId of recipientIds) {
+          await sendPushNotification(userId, title, message, data);
+        }
+        sentCount = recipientIds.length;
+        console.log(`   ✅ Push notifications sent to ${sentCount} specific user(s)`);
+        break;
+
+      case 'specific_business':
+        // Send to specific business owner(s)
+        if (!recipientIds || recipientIds.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Please provide at least one business ID'
+          });
+        }
+        
+        console.log(`   📊 Sending to ${recipientIds.length} specific business(es)`);
+        
+        for (const businessId of recipientIds) {
+          const business = await Business.findById(businessId).select('owner');
+          if (business && business.owner) {
+            await sendPushNotification(business.owner, title, message, { ...data, businessId });
+            recipientList.push(business.owner);
+            sentCount++;
+          }
+        }
+        console.log(`   ✅ Push notifications sent to ${sentCount} business owner(s)`);
+        break;
+
+      default:
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid recipient type. Use: all_users, all_businesses, specific_user, or specific_business'
+        });
+    }
+
+    // Save individual notification records for each recipient (for notification history)
+    const allRecipients = recipientList.length > 0 ? recipientList : (recipientIds || []);
+    
+    console.log(`   💾 Preparing to save notifications for ${allRecipients.length} recipients`);
+    
+    if (allRecipients && allRecipients.length > 0) {
+      let savedCount = 0;
+      let failedCount = 0;
+      
+      const notificationPromises = allRecipients.map(async (recipientId) => {
+        try {
+          // Determine if recipient is User or BusinessOwner based on recipientType
+          const sentToModel = (recipientType === 'all_businesses' || recipientType === 'specific_business') 
+            ? 'BusinessOwner' 
+            : 'User';
+          
+          const notification = await Notification.create({
+            title,
+            message,
+            sentTo: recipientId,
+            sentToModel,
+            sentBy: req.user.id,
+            type: 'admin_broadcast',
+            data: data || {},
+            recipientType,
+            status: 'sent'
+          });
+          savedCount++;
+          return notification;
+        } catch (err) {
+          failedCount++;
+          console.error(`   ❌ Failed to save notification for recipient ${recipientId}:`, err.message);
+          return null;
+        }
+      });
+      
+      await Promise.all(notificationPromises);
+      console.log(`   ✅ Saved ${savedCount} notification records to database`);
+      if (failedCount > 0) {
+        console.log(`   ⚠️  Failed to save ${failedCount} notification records`);
+      }
+    } else {
+      console.log(`   ⚠️  No recipients to save notifications for`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Notification sent successfully to ${sentCount} recipient(s)`,
+      sentCount,
+      recipientType,
+      notification: {
+        title,
+        message,
+        sentAt: new Date()
+      }
+    });
   } catch (error) {
+    console.error('❌ Error sending notification:', error);
     next(error);
   }
 };

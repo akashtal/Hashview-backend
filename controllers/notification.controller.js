@@ -8,8 +8,21 @@ exports.getNotifications = async (req, res, next) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
+    const { status } = req.query;
 
-    const notifications = await Notification.find({ sentTo: req.user.id })
+    console.log(`📬 Getting notifications for user: ${req.user.id}, status filter: ${status || 'all'}`);
+
+    const query = { sentTo: req.user.id };
+    
+    // Add status filter if provided
+    if (status === 'unread') {
+      query.status = { $ne: 'read' };
+    } else if (status === 'read') {
+      query.status = 'read';
+    }
+
+    const notifications = await Notification.find(query)
+      .populate('sentBy', 'name email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -19,6 +32,8 @@ exports.getNotifications = async (req, res, next) => {
       sentTo: req.user.id, 
       status: { $ne: 'read' } 
     });
+
+    console.log(`   ✅ Found ${notifications.length} notifications (${unreadCount} unread)`);
 
     res.status(200).json({
       success: true,
@@ -30,6 +45,7 @@ exports.getNotifications = async (req, res, next) => {
       notifications
     });
   } catch (error) {
+    console.error('❌ Error getting notifications:', error);
     next(error);
   }
 };

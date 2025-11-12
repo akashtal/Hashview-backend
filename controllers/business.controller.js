@@ -311,6 +311,16 @@ exports.getNearbyBusinesses = async (req, res, next) => {
   try {
     const { latitude, longitude, radius, category, ratingSource, minRating, distance } = req.query;
 
+    console.log('🌍 getNearbyBusinesses request:', {
+      latitude,
+      longitude,
+      distance,
+      radius,
+      ratingSource,
+      minRating,
+      category
+    });
+
     if (!latitude || !longitude) {
       return res.status(400).json({
         success: false,
@@ -322,17 +332,23 @@ exports.getNearbyBusinesses = async (req, res, next) => {
     // distance can be: '1km', '5km', '10km', '25km', 'nearme', or custom radius
     let maxDistance;
     if (distance === 'nearme') {
-      maxDistance = 5000; // 5km for "Near Me"
+      maxDistance = 2000; // 2km for "Near Me" - truly nearby businesses
+      console.log('   📍 Distance filter: Near Me (2km)');
     } else if (distance === '1km') {
       maxDistance = 1000;
+      console.log('   📍 Distance filter: 1km');
     } else if (distance === '5km') {
       maxDistance = 5000;
+      console.log('   📍 Distance filter: 5km');
     } else if (distance === '10km') {
       maxDistance = 10000;
+      console.log('   📍 Distance filter: 10km');
     } else if (distance === '25km') {
       maxDistance = 25000;
+      console.log('   📍 Distance filter: 25km');
     } else {
       maxDistance = parseInt(radius) || 50000; // Default 50km
+      console.log(`   📍 Distance filter: Default (${maxDistance / 1000}km)`);
     }
 
     // Show only active businesses on user home page
@@ -371,10 +387,33 @@ exports.getNearbyBusinesses = async (req, res, next) => {
       .select('-documents')
       .limit(50);
 
+    // Calculate distance for each business and add to response
+    const businessesWithDistance = businesses.map(business => {
+      const businessObj = business.toObject();
+      if (business.location && business.location.coordinates) {
+        const distance = calculateDistance(
+          parseFloat(latitude),
+          parseFloat(longitude),
+          business.location.coordinates[1], // latitude
+          business.location.coordinates[0]  // longitude
+        );
+        businessObj.distance = distance;
+      }
+      return businessObj;
+    });
+
+    console.log(`   ✅ Found ${businessesWithDistance.length} businesses within ${maxDistance / 1000}km`);
+    if (businessesWithDistance.length > 0) {
+      const distances = businessesWithDistance.map(b => b.distance).filter(d => d !== undefined);
+      if (distances.length > 0) {
+        console.log(`   📊 Distance range: ${Math.min(...distances).toFixed(2)}km - ${Math.max(...distances).toFixed(2)}km`);
+      }
+    }
+
     res.status(200).json({
       success: true,
-      count: businesses.length,
-      businesses,
+      count: businessesWithDistance.length,
+      businesses: businessesWithDistance,
       filters: {
         ratingSource: ratingSource || null,
         minRating: minRating || null,
@@ -384,6 +423,7 @@ exports.getNearbyBusinesses = async (req, res, next) => {
       }
     });
   } catch (error) {
+    console.error('❌ getNearbyBusinesses error:', error);
     next(error);
   }
 };
@@ -567,14 +607,84 @@ exports.getBusiness = async (req, res, next) => {
       });
     }
 
+    // Calculate if business is open NOW (backend handles all logic)
+    const isOpenNow = checkIfBusinessIsOpen(business.openingHours);
+
     res.status(200).json({
       success: true,
-      business
+      business: {
+        ...business.toObject(),
+        isOpenNow: isOpenNow.isOpen,
+        openStatus: isOpenNow.status,
+        nextStateChange: isOpenNow.nextChange
+      }
     });
   } catch (error) {
     next(error);
   }
 };
+
+// Helper function to check if business is open NOW (server-side logic)
+function checkIfBusinessIsOpen(openingHours) {
+  if (!openingHours) {
+    return { isOpen: null, status: 'Hours not set', nextChange: null };
+  }
+
+  const now = new Date();
+  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const currentDay = days[now.getDay()];
+  const todayHours = openingHours[currentDay];
+
+  if (!todayHours || todayHours.closed || todayHours.open === 'Closed') {
+    return { isOpen: false, status: 'Closed today', nextChange: null };
+  }
+
+  // Parse time strings (e.g., "09:00 AM")
+  const parseTime = (timeStr) => {
+    if (!timeStr || timeStr === 'Closed') return null;
+    const [time, period] = timeStr.split(' ');
+    let [hours, minutes] = time.split(':').map(Number);
+    
+    if (period === 'PM' && hours !== 12) hours += 12;
+    if (period === 'AM' && hours === 12) hours = 0;
+    
+    return hours * 60 + minutes; // Return minutes since midnight
+  };
+
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const openMinutes = parseTime(todayHours.open);
+  const closeMinutes = parseTime(todayHours.close);
+
+  if (openMinutes === null || closeMinutes === null) {
+    return { isOpen: null, status: 'Hours not set', nextChange: null };
+  }
+
+  const isOpen = currentMinutes >= openMinutes && currentMinutes < closeMinutes;
+  
+  let status, nextChange;
+  if (isOpen) {
+    status = `Open • Closes at ${todayHours.close}`;
+    nextChange = todayHours.close;
+  } else if (currentMinutes < openMinutes) {
+    status = `Closed • Opens at ${todayHours.open}`;
+    nextChange = todayHours.open;
+  } else {
+    status = 'Closed';
+    // Find next opening day
+    for (let i = 1; i <= 7; i++) {
+      const nextDayIndex = (now.getDay() + i) % 7;
+      const nextDay = days[nextDayIndex];
+      const nextDayHours = openingHours[nextDay];
+      
+      if (nextDayHours && !nextDayHours.closed && nextDayHours.open !== 'Closed') {
+        status = `Closed • Opens ${nextDay.charAt(0).toUpperCase() + nextDay.slice(1)} at ${nextDayHours.open}`;
+        break;
+      }
+    }
+  }
+
+  return { isOpen, status, nextChange };
+}
 
 // @desc    Get business dashboard data
 // @route   GET /api/business/:id/dashboard
@@ -935,19 +1045,28 @@ exports.updateTripAdvisorRating = async (req, res, next) => {
   try {
     const { rating, reviewCount, profileUrl } = req.body;
 
-    // Validation
-    if (rating !== undefined && rating !== null && (rating < 0 || rating > 5)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Rating must be between 0 and 5'
-      });
+    console.log('📝 TripAdvisor update request:', { rating, reviewCount, profileUrl });
+
+    // Validate rating if provided
+    if (rating !== undefined && rating !== null && rating !== '') {
+      const parsedRating = parseFloat(rating);
+      if (isNaN(parsedRating) || parsedRating < 0 || parsedRating > 5) {
+        return res.status(400).json({
+          success: false,
+          message: 'Rating must be a valid number between 0 and 5'
+        });
+      }
     }
 
-    if (reviewCount !== undefined && reviewCount !== null && reviewCount < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Review count must be a positive number'
-      });
+    // Validate review count if provided
+    if (reviewCount !== undefined && reviewCount !== null && reviewCount !== '') {
+      const parsedCount = parseInt(reviewCount);
+      if (isNaN(parsedCount) || parsedCount < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Review count must be a valid positive number'
+        });
+      }
     }
 
     const business = await Business.findById(req.params.id);
@@ -966,7 +1085,7 @@ exports.updateTripAdvisorRating = async (req, res, next) => {
       });
     }
 
-    // Update TripAdvisor rating
+    // Initialize externalProfiles if needed
     if (!business.externalProfiles) {
       business.externalProfiles = {};
     }
@@ -974,18 +1093,45 @@ exports.updateTripAdvisorRating = async (req, res, next) => {
       business.externalProfiles.tripAdvisor = {};
     }
 
-    if (rating !== undefined && rating !== null) {
-      business.externalProfiles.tripAdvisor.rating = parseFloat(rating);
-    }
-    if (reviewCount !== undefined && reviewCount !== null) {
-      business.externalProfiles.tripAdvisor.reviewCount = parseInt(reviewCount);
-    }
-    if (profileUrl !== undefined && profileUrl !== null) {
-      business.externalProfiles.tripAdvisor.profileUrl = profileUrl;
-    }
-    business.externalProfiles.tripAdvisor.lastSynced = new Date();
+    // Track if any updates were made
+    let updated = false;
 
-    await business.save();
+    // Update TripAdvisor fields (only if valid values provided)
+    if (rating !== undefined && rating !== null && rating !== '') {
+      const parsedRating = parseFloat(rating);
+      if (!isNaN(parsedRating)) {
+        business.externalProfiles.tripAdvisor.rating = parsedRating;
+        console.log('✅ Updated rating:', parsedRating);
+        updated = true;
+      }
+    }
+    
+    if (reviewCount !== undefined && reviewCount !== null && reviewCount !== '') {
+      const parsedCount = parseInt(reviewCount);
+      if (!isNaN(parsedCount)) {
+        business.externalProfiles.tripAdvisor.reviewCount = parsedCount;
+        console.log('✅ Updated review count:', parsedCount);
+        updated = true;
+      }
+    }
+    
+    if (profileUrl !== undefined && profileUrl !== null && profileUrl !== '') {
+      business.externalProfiles.tripAdvisor.profileUrl = profileUrl.trim();
+      console.log('✅ Updated profile URL:', profileUrl);
+      updated = true;
+    }
+
+    // Only update lastSynced if something was actually updated
+    if (updated) {
+      business.externalProfiles.tripAdvisor.lastSynced = new Date();
+      await business.save();
+      console.log('✅ TripAdvisor data saved successfully');
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid data provided to update. Please provide rating, review count, or profile URL.'
+      });
+    }
 
     res.status(200).json({
       success: true,

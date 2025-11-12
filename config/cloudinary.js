@@ -197,12 +197,54 @@ const uploadBusinessGallery = multer({
   }
 });
 
+// Review Media Storage (Photos)
+const reviewPhotoStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'hashview/reviews/photos',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+    transformation: [
+      { width: 1024, height: 1024, crop: 'limit' },
+      { quality: 'auto', fetch_format: 'auto' }
+    ],
+    overwrite: false,
+    resource_type: 'image'
+  }
+});
+
+// Review Media Storage (Videos)
+const reviewVideoStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'hashview/reviews/videos',
+    resource_type: 'video',
+    allowed_formats: ['mp4', 'mov', 'avi', 'wmv', 'flv', 'webm'],
+    overwrite: false
+  }
+});
+
+const uploadReviewPhotos = multer({
+  storage: reviewPhotoStorage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB per photo
+  }
+});
+
+const uploadReviewVideos = multer({
+  storage: reviewVideoStorage,
+  limits: {
+    fileSize: 50 * 1024 * 1024 // 50MB per video
+  }
+});
+
 module.exports = {
   cloudinary,
   uploadProfile,
   uploadBusinessLogo,
   uploadBusinessCover,
   uploadBusinessDocuments,
-  uploadBusinessGallery
+  uploadBusinessGallery,
+  uploadReviewPhotos,
+  uploadReviewVideos
 };
 

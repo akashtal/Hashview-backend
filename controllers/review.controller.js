@@ -117,6 +117,7 @@ exports.createReview = async (req, res, next) => {
       latitude, 
       longitude, 
       images,
+      videos, // Videos array with URLs from Cloudinary
       // 🔒 COMPREHENSIVE SECURITY METADATA from frontend
       locationAccuracy,
       verificationTime,
@@ -128,18 +129,8 @@ exports.createReview = async (req, res, next) => {
       devicePlatform
     } = req.body;
     
-    console.log('\n🔒 ========== COMPREHENSIVE SECURITY VALIDATION ==========');
-    console.log(`User: ${req.user.id}`);
-    console.log(`Business: ${businessId}`);
-    console.log(`Security Metadata Received:`, {
-      locationAccuracy,
-      verificationTime,
-      motionDetected,
-      isMockLocation,
-      locationHistoryCount,
-      suspiciousActivitiesCount: suspiciousActivities?.length || 0,
-      devicePlatform
-    });
+    // Geofencing security validation
+    console.log(`🔒 Review attempt - User: ${req.user.id}, Business: ${businessId}`);
 
     // Get business
     const business = await Business.findById(businessId);
@@ -168,9 +159,6 @@ exports.createReview = async (req, res, next) => {
     });
 
     if (todayReviewCount >= 5) {
-      console.log(`⚠️ RATE LIMIT: User ${req.user.id} has ${todayReviewCount} reviews today`);
-      
-      // Log suspicious behavior
       await logSuspiciousBehavior(req.user.id, 'RATE_LIMIT_EXCEEDED', {
         reviewCount: todayReviewCount,
         businessId: businessId
@@ -202,13 +190,7 @@ exports.createReview = async (req, res, next) => {
     const businessLat = business.location.coordinates[1];
     const businessLon = business.location.coordinates[0];
     
-    // Debug logging
-    console.log('\n🌍 Geofence Check:');
-    console.log(`   Business: ${business.name}`);
-    console.log(`   Business Location: [${businessLon}, ${businessLat}]`);
-    console.log(`   User Location: [${longitude}, ${latitude}]`);
-    console.log(`   Allowed Radius: ${business.radius}m`);
-    
+    // Verify geofencing
     const withinGeofence = isWithinGeofence(
       latitude,
       longitude,
@@ -217,21 +199,14 @@ exports.createReview = async (req, res, next) => {
       business.radius
     );
     
-    // Calculate actual distance for debugging
     const { calculateDistance } = require('../utils/geolocation');
     const actualDistance = calculateDistance(latitude, longitude, businessLat, businessLon);
-    console.log(`   Actual Distance: ${actualDistance.toFixed(2)}m`);
-    console.log(`   Within Geofence: ${withinGeofence}`);
 
     if (!withinGeofence) {
-      console.log(`   ❌ BLOCKED: User is ${actualDistance.toFixed(2)}m away (limit: ${business.radius}m)`);
-      
       await logSuspiciousBehavior(req.user.id, 'GEOFENCE_VIOLATION', {
         businessId: businessId,
         distance: actualDistance,
-        allowedRadius: business.radius,
-        userLocation: [longitude, latitude],
-        businessLocation: [businessLon, businessLat]
+        allowedRadius: business.radius
       });
       
       return res.status(403).json({
@@ -239,19 +214,14 @@ exports.createReview = async (req, res, next) => {
         message: `You must be within ${business.radius}m of the business to post a review. You are currently ${actualDistance.toFixed(0)}m away.`
       });
     }
-    
-    console.log(`   ✅ PASSED: User is within geofence`);
 
     // 🔒 COMPREHENSIVE SECURITY VALIDATION
     
-    // CHECK #3: GPS Accuracy
+    // GPS Accuracy check
     if (locationAccuracy && locationAccuracy > 50) {
-      console.log(`   ❌ BLOCKED: GPS accuracy too low (${locationAccuracy.toFixed(1)}m)`);
-      
       await logSuspiciousBehavior(req.user.id, 'POOR_GPS_ACCURACY', {
         businessId: businessId,
-        accuracy: locationAccuracy,
-        threshold: 50
+        accuracy: locationAccuracy
       });
       
       return res.status(400).json({
@@ -259,31 +229,17 @@ exports.createReview = async (req, res, next) => {
         message: `GPS accuracy is too low (${Math.round(locationAccuracy)}m). Please improve your GPS signal and try again.`
       });
     }
-    console.log(`   ✅ PASSED: GPS accuracy good (${locationAccuracy?.toFixed(1) || 'N/A'}m)`);
 
-    // CHECK #4: Verification Time (30 seconds required)
+    // Verification time check (informational)
     if (verificationTime !== undefined && verificationTime !== 30) {
-      console.log(`   ⚠️ WARNING: Verification time mismatch (${verificationTime}s instead of 30s)`);
-      
       await logSuspiciousBehavior(req.user.id, 'VERIFICATION_TIME_MISMATCH', {
         businessId: businessId,
-        verificationTime: verificationTime,
-        expected: 30
+        verificationTime: verificationTime
       });
-      
-      // Don't block, but flag for review
     }
 
-    // CHECK #5: Motion Detection (removed - not required for submission)
-    // We still log it for analytics, but don't block reviews
-    if (motionDetected !== undefined) {
-      console.log(`   ℹ️ Motion detected: ${motionDetected} (informational only)`);
-    }
-
-    // CHECK #6: Mock Location Detection
+    // Mock Location detection
     if (isMockLocation === true) {
-      console.log(`   ❌ BLOCKED: Mock/fake GPS detected`);
-      
       await logSuspiciousBehavior(req.user.id, 'MOCK_LOCATION_DETECTED', {
         businessId: businessId,
         devicePlatform: devicePlatform
@@ -294,29 +250,17 @@ exports.createReview = async (req, res, next) => {
         message: 'Mock/fake GPS location detected. Please disable any location spoofing apps and use your real GPS location.'
       });
     }
-    console.log(`   ✅ PASSED: Real GPS location`);
 
-    // CHECK #7: Location History (teleportation detection)
+    // Location History check
     if (locationHistoryCount !== undefined && locationHistoryCount < 5) {
-      console.log(`   ⚠️ WARNING: Insufficient location history (${locationHistoryCount} points)`);
-      
       await logSuspiciousBehavior(req.user.id, 'INSUFFICIENT_LOCATION_HISTORY', {
         businessId: businessId,
         locationHistoryCount: locationHistoryCount
       });
-      
-      // Could indicate quick submission without proper verification
     }
 
-    // CHECK #8: Suspicious Activities from Frontend
+    // Suspicious Activities check
     if (suspiciousActivities && suspiciousActivities.length > 0) {
-      console.log(`   ⚠️ WARNING: ${suspiciousActivities.length} suspicious activities detected`);
-      
-      suspiciousActivities.forEach((activity, index) => {
-        console.log(`      ${index + 1}. ${activity.type}:`, activity.metadata);
-      });
-      
-      // Log all suspicious activities
       for (const activity of suspiciousActivities) {
         await logSuspiciousBehavior(req.user.id, `FRONTEND_${activity.type}`, {
           businessId: businessId,
@@ -325,10 +269,7 @@ exports.createReview = async (req, res, next) => {
         });
       }
       
-      // If too many suspicious activities, block the review
       if (suspiciousActivities.length >= 3) {
-        console.log(`   ❌ BLOCKED: Too many suspicious activities (${suspiciousActivities.length})`);
-        
         return res.status(403).json({
           success: false,
           message: 'Multiple security concerns detected. Your submission has been flagged for review by our team.'
@@ -336,11 +277,8 @@ exports.createReview = async (req, res, next) => {
       }
     }
 
-    // CHECK #9: Device Fingerprint (for analytics & fraud detection)
+    // Device Fingerprint check
     if (deviceFingerprint) {
-      console.log(`   📱 Device: ${deviceFingerprint.manufacturer} ${deviceFingerprint.modelName} (${deviceFingerprint.osName} ${deviceFingerprint.osVersion})`);
-      
-      // Check if same device submitted multiple reviews today
       const sameDeviceReviews = await Review.countDocuments({
         user: req.user.id,
         'securityMetadata.deviceFingerprint.deviceId': deviceFingerprint.deviceId,
@@ -348,8 +286,6 @@ exports.createReview = async (req, res, next) => {
       });
       
       if (sameDeviceReviews >= 3) {
-        console.log(`   ⚠️ WARNING: Same device used for ${sameDeviceReviews} reviews today`);
-        
         await logSuspiciousBehavior(req.user.id, 'MULTIPLE_DEVICE_REVIEWS', {
           businessId: businessId,
           deviceId: deviceFingerprint.deviceId,
@@ -357,9 +293,6 @@ exports.createReview = async (req, res, next) => {
         });
       }
     }
-
-    console.log('========================================================');
-    console.log(`✅ ALL SECURITY CHECKS PASSED - Creating review\n`);
 
     // Create review with comprehensive security metadata
     const review = await Review.create({
@@ -372,6 +305,7 @@ exports.createReview = async (req, res, next) => {
         coordinates: [longitude, latitude]
       },
       images: images || [],
+      videos: videos || [],
       verified: true,
       // Store all security metadata for auditing
       securityMetadata: {
