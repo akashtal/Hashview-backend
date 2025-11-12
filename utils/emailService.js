@@ -12,9 +12,13 @@ let resendClient = null;
 if (useResend) {
   // Resend for production
   resendClient = new Resend(process.env.RESEND_API_KEY);
+  const fromEmail = process.env.FROM_EMAIL || 'onboarding@resend.dev';
   logger.info('✅ Email service using Resend');
   console.log('✅ Email service using Resend');
-  console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || 'NOT SET');
+  console.log('📧 FROM_EMAIL:', fromEmail);
+  if (!process.env.FROM_EMAIL) {
+    console.log('⚠️  FROM_EMAIL not set, using default: onboarding@resend.dev');
+  }
 } else {
   // Gmail SMTP for development
   transporter = nodemailer.createTransport({
@@ -71,10 +75,15 @@ async function sendViaResend(mailOptions) {
 // Send OTP Email
 const sendOTPEmail = async (to, otp, name = 'User') => {
   try {
+    // Determine from email based on service being used
+    const fromEmail = useResend 
+      ? (process.env.FROM_EMAIL || 'onboarding@resend.dev')
+      : (process.env.SMTP_USER || process.env.FROM_EMAIL || 'noreply@gmail.com');
+    
     const mailOptions = {
       from: {
         name: 'HashView',
-        address: process.env.SMTP_USER || process.env.FROM_EMAIL
+        address: fromEmail
       },
       to: to,
       subject: 'HashView - Email Verification Code',
@@ -196,10 +205,15 @@ const sendOTPEmail = async (to, otp, name = 'User') => {
 // Send Password Reset Email
 const sendPasswordResetEmail = async (to, otp, name = 'User') => {
   try {
+    // Determine from email based on service being used
+    const fromEmail = useResend 
+      ? (process.env.FROM_EMAIL || 'onboarding@resend.dev')
+      : (process.env.SMTP_USER || process.env.FROM_EMAIL || 'noreply@gmail.com');
+    
     const mailOptions = {
       from: {
         name: 'HashView',
-        address: process.env.SMTP_USER || process.env.FROM_EMAIL
+        address: fromEmail
       },
       to: to,
       subject: 'HashView - Password Reset Code',
