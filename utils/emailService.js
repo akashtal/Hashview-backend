@@ -168,7 +168,7 @@ const sendOTPEmail = async (to, otp, name = 'User') => {
         address: fromEmail
       },
       to: to,
-      subject: 'HashView - Email Verification Code',
+      subject: 'Welcome to HashView - Verify Your Email',
       html: `
         <!DOCTYPE html>
         <html>
@@ -307,7 +307,7 @@ const sendPasswordResetEmail = async (to, otp, name = 'User') => {
         address: fromEmail
       },
       to: to,
-      subject: 'HashView - Password Reset Code',
+      subject: 'Reset Your HashView Password',
       html: `
         <!DOCTYPE html>
         <html>
