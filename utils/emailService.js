@@ -1,43 +1,36 @@
 const nodemailer = require('nodemailer');
-const { Resend } = require('resend');
-const axios = require('axios');
-const sgMail = require('@sendgrid/mail');
 const logger = require('./logger');
 
-// Email service priority: Resend > SendGrid > Brevo > Gmail SMTP
-const useResend = process.env.RESEND_API_KEY;
-const useSendGrid = !useResend && process.env.SENDGRID_API_KEY;
-const useBrevo = !useResend && !useSendGrid && process.env.BREVO_API_KEY;
-
-// Initialize SendGrid if API key exists
-if (useSendGrid) {
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-}
+// Email service: SendGrid SMTP (Production) or Gmail SMTP (Development)
+const isProduction = process.env.NODE_ENV === 'production';
+const useSendGrid = isProduction && process.env.SMTP_HOST === 'smtp.sendgrid.net';
 
 let transporter = null;
-let resendClient = null;
 
-// Initialize email service
-if (useResend) {
-  // Resend for production
-  resendClient = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = process.env.FROM_EMAIL || 'onboarding@resend.dev';
-  logger.info('✅ Email service using Resend');
-  console.log('✅ Email service using Resend');
-  console.log('📧 FROM_EMAIL:', fromEmail);
-  if (!process.env.FROM_EMAIL) {
-    console.log('⚠️  FROM_EMAIL not set, using default: onboarding@resend.dev');
-  }
-} else if (useSendGrid) {
-  // SendGrid for production (100 emails/day free, works on cloud hosting!)
-  logger.info('✅ Email service using SendGrid');
-  console.log('✅ Email service using SendGrid');
-  console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || 'NOT SET');
-} else if (useBrevo) {
-  // Brevo for production (works on cloud hosting!)
-  logger.info('✅ Email service using Brevo API');
-  console.log('✅ Email service using Brevo API');
-  console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || 'NOT SET');
+// Initialize SMTP service
+if (useSendGrid) {
+  // SendGrid SMTP for production
+  transporter = nodemailer.createTransport({
+    host: 'smtp.sendgrid.net',
+    port: parseInt(process.env.SMTP_PORT) || 587,
+    secure: false, // Use TLS
+    auth: {
+      user: 'apikey', // SendGrid uses literal "apikey" as username
+      pass: process.env.SMTP_PASS
+    }
+  });
+
+  // Verify SendGrid connection
+  transporter.verify((error, success) => {
+    if (error) {
+      logger.error('❌ SendGrid SMTP connection error:', error.message);
+      console.log('❌ SendGrid SMTP connection error:', error.message);
+    } else {
+      logger.info('✅ Email service ready (SendGrid SMTP)');
+      console.log('✅ Email service ready (SendGrid SMTP)');
+      console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || process.env.SMTP_USER || 'NOT SET');
+    }
+  });
 } else {
   // Gmail SMTP for development
   transporter = nodemailer.createTransport({
@@ -56,111 +49,23 @@ if (useResend) {
   // Verify SMTP connection
   transporter.verify((error, success) => {
     if (error) {
-      logger.error('❌ Gmail SMTP connection error:', error.message);
-      console.log('❌ Gmail SMTP connection error:', error.message);
-      console.log('💡 Make sure you are using Gmail App Password (not regular password)');
+      logger.error('❌ SMTP connection error:', error.message);
+      console.log('❌ SMTP connection error:', error.message);
+      console.log('💡 Make sure you are using correct SMTP credentials');
     } else {
-      logger.info('✅ Email service ready (Gmail SMTP)');
-      console.log('✅ Email service ready (Gmail SMTP)');
+      logger.info('✅ Email service ready (SMTP)');
+      console.log('✅ Email service ready (SMTP)');
+      console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || process.env.SMTP_USER || 'NOT SET');
     }
   });
 }
 
-// Helper function to send email via Resend API
-async function sendViaResend(mailOptions) {
-  try {
-    const { data, error } = await resendClient.emails.send({
-      from: `${mailOptions.from.name} <${mailOptions.from.address}>`,
-      to: [mailOptions.to],
-      subject: mailOptions.subject,
-      html: mailOptions.html,
-    });
-
-    if (error) {
-      logger.error('❌ Resend API error:', error);
-      throw new Error(error.message || 'Failed to send email via Resend');
-    }
-
-    logger.info(`✅ Email sent via Resend to ${mailOptions.to}`);
-    console.log(`✅ Email sent via Resend to: ${mailOptions.to}`);
-    console.log(`📧 Message ID: ${data.id}`);
-    return { messageId: data.id };
-  } catch (error) {
-    logger.error('❌ Resend error:', error.message);
-    throw new Error(error.message || 'Failed to send email via Resend');
-  }
-}
-
-// Helper function to send email via SendGrid API
-async function sendViaSendGrid(mailOptions) {
-  try {
-    const msg = {
-      to: mailOptions.to,
-      from: {
-        email: mailOptions.from.address,
-        name: mailOptions.from.name
-      },
-      subject: mailOptions.subject,
-      html: mailOptions.html,
-    };
-
-    const result = await sgMail.send(msg);
-    
-    logger.info(`✅ Email sent via SendGrid to ${mailOptions.to}`);
-    console.log(`✅ Email sent via SendGrid to: ${mailOptions.to}`);
-    console.log(`📧 Message ID: ${result[0].headers['x-message-id']}`);
-    return { messageId: result[0].headers['x-message-id'] };
-  } catch (error) {
-    logger.error('❌ SendGrid error:', error.response?.body || error.message);
-    throw new Error(error.response?.body?.errors?.[0]?.message || 'Failed to send email via SendGrid');
-  }
-}
-
-// Helper function to send email via Brevo API
-async function sendViaBrevo(mailOptions) {
-  try {
-    const response = await axios.post(
-      'https://api.brevo.com/v3/smtp/email',
-      {
-        sender: {
-          name: mailOptions.from.name,
-          email: mailOptions.from.address
-        },
-        to: [{ email: mailOptions.to }],
-        subject: mailOptions.subject,
-        htmlContent: mailOptions.html
-      },
-      {
-        headers: {
-          'accept': 'application/json',
-          'api-key': process.env.BREVO_API_KEY,
-          'content-type': 'application/json'
-        }
-      }
-    );
-
-    logger.info(`✅ Email sent via Brevo to ${mailOptions.to}`);
-    console.log(`✅ Email sent via Brevo to: ${mailOptions.to}`);
-    console.log(`📧 Message ID: ${response.data.messageId}`);
-    return { messageId: response.data.messageId };
-  } catch (error) {
-    logger.error('❌ Brevo API error:', error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || 'Failed to send email via Brevo');
-  }
-}
 
 // Send OTP Email
 const sendOTPEmail = async (to, otp, name = 'User') => {
   try {
-    // Determine from email based on service being used
-    let fromEmail;
-    if (useResend) {
-      fromEmail = process.env.FROM_EMAIL || 'onboarding@resend.dev';
-    } else if (useSendGrid || useBrevo) {
-      fromEmail = process.env.FROM_EMAIL || 'hashview01@gmail.com';
-    } else {
-      fromEmail = process.env.SMTP_USER || process.env.FROM_EMAIL || 'noreply@gmail.com';
-    }
+    // Determine from email: use FROM_EMAIL or SMTP_USER
+    const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER || 'noreply@gmail.com';
     
     const mailOptions = {
       from: {
@@ -267,20 +172,12 @@ const sendOTPEmail = async (to, otp, name = 'User') => {
       `
     };
 
-    // Use Resend > SendGrid > Brevo > Gmail SMTP
-    if (useResend) {
-      return await sendViaResend(mailOptions);
-    } else if (useSendGrid) {
-      return await sendViaSendGrid(mailOptions);
-    } else if (useBrevo) {
-      return await sendViaBrevo(mailOptions);
-    } else {
-      const info = await transporter.sendMail(mailOptions);
-      logger.info(`✅ Email sent successfully to ${to}`);
-      console.log(`✅ Email sent to: ${to}`);
-      console.log(`📧 Message ID: ${info.messageId}`);
-      return info;
-    }
+    // Send email via SMTP (SendGrid in production, Gmail in development)
+    const info = await transporter.sendMail(mailOptions);
+    logger.info(`✅ Email sent successfully to ${to}`);
+    console.log(`✅ Email sent to: ${to}`);
+    console.log(`📧 Message ID: ${info.messageId}`);
+    return info;
   } catch (error) {
     logger.error('❌ Error sending email:', error);
     console.error('❌ Error sending email:', error.message);
@@ -291,15 +188,8 @@ const sendOTPEmail = async (to, otp, name = 'User') => {
 // Send Password Reset Email
 const sendPasswordResetEmail = async (to, otp, name = 'User') => {
   try {
-    // Determine from email based on service being used
-    let fromEmail;
-    if (useResend) {
-      fromEmail = process.env.FROM_EMAIL || 'onboarding@resend.dev';
-    } else if (useSendGrid || useBrevo) {
-      fromEmail = process.env.FROM_EMAIL || 'hashview01@gmail.com';
-    } else {
-      fromEmail = process.env.SMTP_USER || process.env.FROM_EMAIL || 'noreply@gmail.com';
-    }
+    // Determine from email: use FROM_EMAIL or SMTP_USER
+    const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER || 'noreply@gmail.com';
     
     const mailOptions = {
       from: {
@@ -370,18 +260,10 @@ const sendPasswordResetEmail = async (to, otp, name = 'User') => {
       `
     };
 
-    // Use Resend > SendGrid > Brevo > Gmail SMTP
-    if (useResend) {
-      return await sendViaResend(mailOptions);
-    } else if (useSendGrid) {
-      return await sendViaSendGrid(mailOptions);
-    } else if (useBrevo) {
-      return await sendViaBrevo(mailOptions);
-    } else {
-      const info = await transporter.sendMail(mailOptions);
-      logger.info(`✅ Password reset email sent to ${to}`);
-      return info;
-    }
+    // Send email via SMTP (SendGrid in production, Gmail in development)
+    const info = await transporter.sendMail(mailOptions);
+    logger.info(`✅ Password reset email sent to ${to}`);
+    return info;
   } catch (error) {
     logger.error('❌ Error sending password reset email:', error);
     throw error;
@@ -393,3 +275,4 @@ module.exports = {
   sendOTPEmail,
   sendPasswordResetEmail
 };
+

@@ -42,9 +42,26 @@ const schemas = {
   register: Joi.object({
     name: Joi.string().min(2).max(50).required(),
     email: Joi.string().email().required(),
-    phone: Joi.string().pattern(/^[0-9]{10,15}$/).required(),
+    phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).required(),
     password: Joi.string().min(6).required(),
-    role: Joi.string().valid('customer', 'business').default('customer')
+    role: Joi.string().valid('customer', 'business').default('customer'),
+    address: Joi.object({
+      buildingNumber: Joi.string().allow('', null),
+      street: Joi.string().allow('', null),
+      city: Joi.string().allow('', null),
+      county: Joi.string().allow('', null),
+      postcode: Joi.string().allow('', null),
+      country: Joi.string().allow('', null),
+      landmark: Joi.string().allow('', null),
+      fullAddress: Joi.string().allow('', null),
+    }).optional(),
+    buildingNumber: Joi.string().allow('', null),
+    street: Joi.string().allow('', null),
+    city: Joi.string().allow('', null),
+    county: Joi.string().allow('', null),
+    postcode: Joi.string().allow('', null),
+    country: Joi.string().allow('', null),
+    landmark: Joi.string().allow('', null)
   }),
 
   login: Joi.object({
@@ -54,7 +71,7 @@ const schemas = {
   }),
 
   loginWithPhone: Joi.object({
-    phone: Joi.string().pattern(/^[0-9]{10,15}$/).required(),
+    phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).required(),
     otp: Joi.string().length(6).required()
   }),
 
@@ -97,18 +114,21 @@ const schemas = {
     name: Joi.string().min(2).max(100).required(),
     ownerName: Joi.string().min(2).max(100).optional(),
     email: Joi.string().email().required(),
-    phone: Joi.string().required(),
+    phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).required(),
     category: Joi.string().valid('restaurant', 'cafe', 'retail', 'services', 'healthcare', 'education', 'entertainment', 'salon', 'hotel', 'gym', 'other').required(),
     description: Joi.string().max(500).allow('', null).optional(),
     // Accept address as string OR structured object OR manual fields
     address: Joi.alternatives().try(
       Joi.string().allow(''),
       Joi.object({
+        buildingNumber: Joi.string().allow('', null),
         street: Joi.string().optional(),
         area: Joi.string().optional(),
         city: Joi.string().optional(),
+        county: Joi.string().allow('', null),
         state: Joi.string().optional(),
         country: Joi.string().optional(),
+        postcode: Joi.string().allow('', null),
         zipCode: Joi.string().optional(),
         pincode: Joi.string().optional(),
         landmark: Joi.string().optional(),
@@ -116,10 +136,14 @@ const schemas = {
       })
     ).optional(),
     // Manual address fields (sent separately from address object)
+    buildingNumber: Joi.string().allow('', null).optional(),
     street: Joi.string().allow('').optional(),
     area: Joi.string().allow('').optional(),
     city: Joi.string().allow('').optional(),
+    county: Joi.string().allow('', null).optional(),
     state: Joi.string().allow('').optional(),
+    postcode: Joi.string().allow('', null).optional(),
+    country: Joi.string().allow('', null).optional(),
     pincode: Joi.string().allow('').optional(),
     landmark: Joi.string().allow('').optional(),
     latitude: Joi.number().min(-90).max(90).required(),
@@ -181,7 +205,7 @@ const schemas = {
   // Update profile validation
   updateProfile: Joi.object({
     name: Joi.string().min(2).max(50),
-    phone: Joi.string().pattern(/^[0-9]{10,15}$/),
+    phone: Joi.string().pattern(/^\+?[0-9]{7,15}$/),
     location: Joi.object({
       latitude: Joi.number().min(-90).max(90),
       longitude: Joi.number().min(-180).max(180),

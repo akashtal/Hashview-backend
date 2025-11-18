@@ -19,7 +19,8 @@ const businessOwnerSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Phone number is required'],
     unique: true,
-    trim: true
+    trim: true,
+    match: [/^\+?[0-9]{7,15}$/, 'Please provide a valid phone number with country code']
   },
   passwordHash: {
     type: String,
@@ -30,6 +31,17 @@ const businessOwnerSchema = new mongoose.Schema({
     type: String,
     default: 'business',
     enum: ['business']
+  },
+  address: {
+    buildingNumber: String,
+    street: String,
+    city: String,
+    county: String,
+    state: String,
+    postcode: String,
+    country: { type: String, default: 'United Kingdom' },
+    landmark: String,
+    fullAddress: String
   },
   profileImage: {
     type: String,
@@ -130,6 +142,7 @@ businessOwnerSchema.methods.getPublicProfile = function() {
     status: this.status,
     emailVerified: this.emailVerified,
     phoneVerified: this.phoneVerified,
+    address: this.address,
     businesses: this.businesses,
     createdAt: this.createdAt
   };

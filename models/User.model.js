@@ -21,7 +21,7 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Phone number is required'],
     unique: true,
-    match: [/^[0-9]{10,15}$/, 'Please provide a valid phone number']
+    match: [/^\+?[0-9]{7,15}$/, 'Please provide a valid phone number with country code']
   },
   passwordHash: {
     type: String,
@@ -33,6 +33,17 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ['customer', 'business', 'admin'],
     default: 'customer'
+  },
+  address: {
+    buildingNumber: String,
+    street: String,
+    city: String,
+    county: String,
+    state: String,
+    postcode: String,
+    country: { type: String, default: 'United Kingdom' },
+    landmark: String,
+    fullAddress: String
   },
   location: {
     type: {
@@ -139,6 +150,7 @@ userSchema.methods.getPublicProfile = function() {
     status: this.status,
     emailVerified: this.emailVerified,
     phoneVerified: this.phoneVerified,
+    address: this.address,
     location: this.location,
     createdAt: this.createdAt
   };

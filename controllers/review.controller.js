@@ -4,6 +4,7 @@ const Coupon = require('../models/Coupon.model');
 const { isWithinGeofence } = require('../utils/geolocation');
 const { generateCouponCode, calculateCouponExpiry } = require('../utils/coupon');
 const { sendPushNotification } = require('../utils/notification');
+const { generateCouponQRCode } = require('../utils/qrcode');
 const logger = require('../utils/logger');
 
 // In-memory suspicious behavior log (in production, use MongoDB collection)
@@ -348,6 +349,28 @@ exports.createReview = async (req, res, next) => {
       isActive: true
     });
 
+    // Check if redemption limit is reached
+    if (couponTemplate && couponTemplate.redemptionLimit !== null) {
+      // Count how many review_reward coupons have been redeemed for this template
+      const redeemedCount = await Coupon.countDocuments({
+        business: businessId,
+        type: 'review_reward',
+        status: 'redeemed'
+      });
+
+      if (redeemedCount >= couponTemplate.redemptionLimit) {
+        // Redemption limit reached, don't issue coupon
+        logger.info(`Redemption limit reached for business ${businessId}. Template limit: ${couponTemplate.redemptionLimit}, Redeemed: ${redeemedCount}`);
+        // Still create the review, just without coupon
+        res.status(201).json({
+          success: true,
+          message: 'Review posted successfully. Coupon redemption limit reached.',
+          review
+        });
+        return;
+      }
+    }
+
     // Generate coupon as reward (2 hours validity)
     const couponCode = generateCouponCode();
     const couponExpiry = new Date();
@@ -360,6 +383,7 @@ exports.createReview = async (req, res, next) => {
     const minPurchaseAmount = couponTemplate?.minPurchaseAmount || 0;
     const maxDiscountAmount = couponTemplate?.maxDiscountAmount || null;
 
+    // Create coupon first (we'll update QR code after)
     const coupon = await Coupon.create({
       type: 'review_reward',
       business: businessId,
@@ -376,6 +400,21 @@ exports.createReview = async (req, res, next) => {
       status: 'active',
       terms: 'Valid for 2 hours from time of issue. Can be used once.'
     });
+
+    // Generate QR code data with actual coupon ID
+    const qrCodeData = JSON.stringify({
+      type: 'coupon',
+      couponId: coupon._id.toString(),
+      code: couponCode,
+      businessId: businessId.toString(),
+      userId: req.user.id.toString(),
+      reviewId: review._id.toString(),
+      timestamp: new Date().toISOString()
+    });
+    
+    // Update coupon with QR code data
+    coupon.qrCodeData = qrCodeData;
+    await coupon.save();
 
     // Increment template usage count (for analytics)
     if (couponTemplate) {

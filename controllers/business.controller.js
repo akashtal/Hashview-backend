@@ -16,7 +16,7 @@ exports.registerBusiness = async (req, res, next) => {
 
     const {
       name, ownerName, email, phone, category, description,
-      address, street, area, city, state, pincode, landmark,  // Manual address fields
+      address, buildingNumber, street, area, city, county, state, postcode, pincode, country, landmark,  // UK & International address fields
       latitude, longitude, radius,
       website, tripAdvisorLink, googleBusinessName, openingHours
     } = req.body;
@@ -44,49 +44,58 @@ exports.registerBusiness = async (req, res, next) => {
       radius: radius || 50
     };
 
-    // Handle address - support manual fields OR structured object OR simple string
-    if (street || area || city || state || pincode || landmark) {
-      // Manual address fields provided from form
+    // Handle address - support UK & International formats
+    if (buildingNumber || street || area || city || county || state || postcode || pincode || landmark) {
+      // Manual address fields provided from form (UK or International)
       const addressParts = [];
+      if (buildingNumber) addressParts.push(buildingNumber);
       if (street) addressParts.push(street);
       if (area) addressParts.push(area);
       if (city) addressParts.push(city);
+      if (county) addressParts.push(county);
       if (state) addressParts.push(state);
+      if (postcode) addressParts.push(postcode);
       if (pincode) addressParts.push(pincode);
       if (landmark) addressParts.push(`Near: ${landmark}`);
       
       businessData.address = {
+        buildingNumber: buildingNumber || '',
         street: street || '',
         area: area || '',
         city: city || '',
+        county: county || '',
         state: state || '',
+        postcode: postcode || '',
+        zipCode: postcode || pincode || '',  // Use postcode or pincode as zipCode
         pincode: pincode || '',
-        zipCode: pincode || '',  // Use pincode as zipCode
         landmark: landmark || '',
-        country: 'India',
+        country: country || 'United Kingdom',
         fullAddress: address || addressParts.join(', ')  // Use address if provided, otherwise combine parts
       };
     } else if (typeof address === 'string') {
       // Simple string address
       businessData.address = {
         fullAddress: address,
-        country: 'India'
+        country: country || 'United Kingdom'
       };
     } else if (address && typeof address === 'object') {
       // Structured address object
       businessData.address = {
         ...address,
-        pincode: address.pincode || address.zipCode,
-        zipCode: address.zipCode || address.pincode,
-        country: address.country || 'India',
+        buildingNumber: address.buildingNumber || '',
+        county: address.county || '',
+        postcode: address.postcode || address.zipCode || '',
+        pincode: address.pincode || '',
+        zipCode: address.zipCode || address.postcode || address.pincode || '',
+        country: address.country || country || 'United Kingdom',
         fullAddress: address.fullAddress || 
-          `${address.street || ''}, ${address.area || ''}, ${address.city || ''}, ${address.state || ''}, ${address.pincode || address.zipCode || ''}`.replace(/, ,/g, ',').replace(/^, |, $/g, '')
+          `${address.buildingNumber || ''} ${address.street || ''}, ${address.city || ''}, ${address.county || ''}, ${address.postcode || address.zipCode || ''}`.replace(/\s+/g, ' ').replace(/, ,/g, ',').replace(/^, |, $/g, '').trim()
       };
     } else {
       // No address provided - use empty structure
       businessData.address = {
         fullAddress: '',
-        country: 'India'
+        country: country || 'United Kingdom'
       };
     }
 
@@ -309,7 +318,7 @@ exports.uploadDocuments = async (req, res, next) => {
 // @access  Public
 exports.getNearbyBusinesses = async (req, res, next) => {
   try {
-    const { latitude, longitude, radius, category, ratingSource, minRating, distance } = req.query;
+    const { latitude, longitude, radius, category, ratingSource, minRating, distance, search, query: legacyQuery } = req.query;
 
     console.log('🌍 getNearbyBusinesses request:', {
       latitude,
@@ -318,7 +327,8 @@ exports.getNearbyBusinesses = async (req, res, next) => {
       radius,
       ratingSource,
       minRating,
-      category
+      category,
+      search: search || legacyQuery
     });
 
     if (!latitude || !longitude) {
@@ -365,8 +375,24 @@ exports.getNearbyBusinesses = async (req, res, next) => {
       }
     };
 
+    // Search query (backend handles case-insensitive search)
+    const searchTerm = search || legacyQuery;
+    if (searchTerm && searchTerm.trim() !== '') {
+      query.$or = [
+        { name: { $regex: searchTerm.trim(), $options: 'i' } },
+        { description: { $regex: searchTerm.trim(), $options: 'i' } },
+        { 'address.fullAddress': { $regex: searchTerm.trim(), $options: 'i' } },
+        { 'address.city': { $regex: searchTerm.trim(), $options: 'i' } },
+        { 'address.area': { $regex: searchTerm.trim(), $options: 'i' } },
+        { 'address.state': { $regex: searchTerm.trim(), $options: 'i' } }
+      ];
+    }
+
     if (category && category !== 'all') {
-      query.category = category;
+      const trimmedCategory = category.trim();
+      query.category = {
+        $regex: new RegExp(`^${escapeRegExp(trimmedCategory)}$`, 'i')
+      };
     }
 
     // Server-side star-based rating filters
@@ -431,16 +457,36 @@ exports.getNearbyBusinesses = async (req, res, next) => {
 // @desc    Get all active businesses (without location filter)
 // @route   GET /api/business/all
 // @access  Public
+const escapeRegExp = (string) => {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
 exports.getAllActiveBusinesses = async (req, res, next) => {
   try {
-    const { category, limit, ratingSource, minRating } = req.query;
+    const { category, limit, ratingSource, minRating, search, query: legacyQuery } = req.query;
     
-    console.log('📋 getAllActiveBusinesses request:', { category, ratingSource, minRating, limit });
+    console.log('📋 getAllActiveBusinesses request:', { category, ratingSource, minRating, limit, search: search || legacyQuery });
     
     const query = { status: 'active' };
     
+    // Search query (backend handles case-insensitive search)
+    const searchTerm = search || legacyQuery;
+    if (searchTerm && searchTerm.trim() !== '') {
+      query.$or = [
+        { name: { $regex: searchTerm.trim(), $options: 'i' } },
+        { description: { $regex: searchTerm.trim(), $options: 'i' } },
+        { 'address.fullAddress': { $regex: searchTerm.trim(), $options: 'i' } },
+        { 'address.city': { $regex: searchTerm.trim(), $options: 'i' } },
+        { 'address.area': { $regex: searchTerm.trim(), $options: 'i' } },
+        { 'address.state': { $regex: searchTerm.trim(), $options: 'i' } }
+      ];
+    }
+    
     if (category && category !== 'all') {
-      query.category = category;
+      const trimmedCategory = category.trim();
+      query.category = {
+        $regex: new RegExp(`^${escapeRegExp(trimmedCategory)}$`, 'i')
+      };
     }
 
     // Server-side star-based rating filters
@@ -522,7 +568,10 @@ exports.searchBusinesses = async (req, res, next) => {
     }
 
     if (category && category !== 'all') {
-      searchQuery.category = category;
+      const trimmedCategory = category.trim();
+      searchQuery.category = {
+        $regex: new RegExp(`^${escapeRegExp(trimmedCategory)}$`, 'i')
+      };
     }
 
     if (city) {

@@ -7,7 +7,9 @@ const {
   updateCoupon,
   deleteCoupon,
   toggleCouponStatus,
-  verifyCouponCode
+  verifyCouponCode,
+  scanAndRedeemCoupon,
+  getRedemptionStats
 } = require('../controllers/businessCoupon.controller');
 const { protect, authorize } = require('../middleware/auth.middleware');
 
@@ -16,8 +18,10 @@ router.post('/verify', verifyCouponCode);
 
 // Protected routes
 router.get('/business/:businessId', protect, authorize('business', 'admin'), getBusinessCoupons);
+router.get('/redemption-stats/:businessId', protect, authorize('business', 'admin'), getRedemptionStats);
 router.get('/:id', protect, getCoupon);
 router.post('/', protect, authorize('business'), createCoupon);
+router.post('/scan-redeem', protect, authorize('business', 'admin'), scanAndRedeemCoupon);
 router.put('/:id', protect, authorize('business', 'admin'), updateCoupon);
 router.delete('/:id', protect, authorize('business', 'admin'), deleteCoupon);
 router.patch('/:id/toggle-status', protect, authorize('business', 'admin'), toggleCouponStatus);

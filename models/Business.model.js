@@ -37,15 +37,18 @@ const businessSchema = new mongoose.Schema({
     maxlength: [500, 'Description cannot exceed 500 characters']
   },
   address: {
-    street: String,
-    area: String,  // Locality/Area
-    city: String,
-    state: String,
-    country: { type: String, default: 'India' },
-    zipCode: String,
-    pincode: String,  // Indian PIN code (alias for zipCode)
-    landmark: String,  // Nearby landmark
-    fullAddress: String
+    buildingNumber: String,  // UK: Building/House number
+    street: String,          // Street name
+    area: String,            // Locality/Area (optional, for backwards compatibility)
+    city: String,            // Town/City
+    county: String,          // UK: County (optional)
+    state: String,           // State/Province (for other countries)
+    country: { type: String, default: 'United Kingdom' },  // Default UK
+    postcode: String,        // UK: Postcode
+    zipCode: String,         // US/Other: ZIP code (alias)
+    pincode: String,         // India: PIN code (for backwards compatibility)
+    landmark: String,        // Nearby landmark
+    fullAddress: String      // Complete formatted address
   },
   location: {
     type: {

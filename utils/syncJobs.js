@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const Business = require('../models/Business.model');
+const Coupon = require('../models/Coupon.model');
 const { syncGoogleRatingsForBusiness } = require('../controllers/externalReviews.controller');
 const logger = require('./logger');
 
@@ -60,6 +61,45 @@ const syncAllGoogleRatings = async () => {
 };
 
 /**
+ * Auto-expire coupons that have passed their 2-hour validity period
+ * Runs every 5 minutes to check and expire coupons
+ */
+const expireCoupons = async () => {
+  try {
+    const now = new Date();
+    
+    // Find all active review_reward coupons that have expired
+    const expiredCoupons = await Coupon.find({
+      type: 'review_reward',
+      status: 'active',
+      validUntil: { $lt: now }
+    });
+
+    if (expiredCoupons.length === 0) {
+      return;
+    }
+
+    logger.info(`🕐 Expiring ${expiredCoupons.length} coupon(s)...`);
+
+    // Update all expired coupons
+    const result = await Coupon.updateMany(
+      {
+        type: 'review_reward',
+        status: 'active',
+        validUntil: { $lt: now }
+      },
+      {
+        $set: { status: 'expired' }
+      }
+    );
+
+    logger.info(`✅ Expired ${result.modifiedCount} coupon(s)`);
+  } catch (error) {
+    logger.error('❌ Error in coupon expiration job:', error);
+  }
+};
+
+/**
  * Initialize cron jobs
  */
 const initializeSyncJobs = () => {
@@ -73,6 +113,15 @@ const initializeSyncJobs = () => {
 
   logger.info('✅ Automatic Google ratings sync job scheduled (Daily at 2:00 AM)');
 
+  // Schedule coupon expiration job every 5 minutes
+  // Cron format: '*/5 * * * *' = Every 5 minutes
+  cron.schedule('*/5 * * * *', expireCoupons, {
+    scheduled: true,
+    timezone: "Asia/Kolkata"
+  });
+
+  logger.info('✅ Automatic coupon expiration job scheduled (Every 5 minutes)');
+
   // Optional: Also run sync every 6 hours for more frequent updates
   // Uncomment the lines below if you want more frequent syncing:
   // cron.schedule('0 */6 * * *', syncAllGoogleRatings, {
@@ -84,6 +133,7 @@ const initializeSyncJobs = () => {
 
 module.exports = {
   syncAllGoogleRatings,
+  expireCoupons,
   initializeSyncJobs
 };
 

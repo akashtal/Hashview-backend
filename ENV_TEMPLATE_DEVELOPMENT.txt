@@ -1,0 +1,21 @@
+# ====================================
+# COPY THIS TO YOUR backend/.env FILE
+# ====================================
+
+NODE_ENV=development
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=hashview01@gmail.com
+SMTP_PASS=your-gmail-app-password-here
+FROM_EMAIL=hashview01@gmail.com
+MONGODB_URI=mongodb://localhost:27017/hashview
+JWT_SECRET=dev-secret-key-for-hashview-minimum-32-characters-long
+CLOUDINARY_CLOUD_NAME=your-cloudinary-cloud-name
+CLOUDINARY_API_KEY=your-cloudinary-api-key
+CLOUDINARY_API_SECRET=your-cloudinary-api-secret
+ADMIN_EMAIL=admin@hashview.com
+ADMIN_PASSWORD=Admin@123
+PORT=5000
+FRONTEND_URL=http://10.44.239.239:8081
+ENABLE_AUTO_SYNC=false
+

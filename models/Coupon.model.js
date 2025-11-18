@@ -74,6 +74,15 @@ const couponSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Redemption tracking (for business type coupon templates)
+  redemptionLimit: {
+    type: Number,
+    default: null // How many users can redeem coupons from this template (e.g., 10)
+  },
+  redemptionCount: {
+    type: Number,
+    default: 0 // How many coupons have been redeemed
+  },
   // Status
   status: {
     type: String,
@@ -84,11 +93,15 @@ const couponSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
-  // Redemption (for review_reward type)
+  // Redemption (for review_reward type - individual user coupons)
   redeemedAt: Date,
   redeemedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
+  },
+  // QR Code data for coupon redemption
+  qrCodeData: {
+    type: String // JSON stringified QR code data
   },
   terms: {
     type: String,

@@ -15,7 +15,23 @@ const emailOtpStore = new Map();
 // @access  Public
 exports.register = async (req, res, next) => {
   try {
-    const { name, email, phone, password, role } = req.body;
+    const { 
+      name, 
+      email, 
+      phone, 
+      password, 
+      role,
+      address: addressInput,
+      buildingNumber,
+      street,
+      city,
+      county,
+      state,
+      postcode,
+      pincode,
+      country,
+      landmark
+    } = req.body;
 
     console.log('\n📝 Registration attempt:', { 
       name, 
@@ -163,19 +179,95 @@ exports.register = async (req, res, next) => {
 
     console.log(`✅ Email and phone are available for ${userRole} registration`);
 
+    const normalizeString = (value) => (typeof value === 'string' ? value.trim() : '');
+    const resolvedCountry = normalizeString(country) || (typeof addressInput === 'object' ? normalizeString(addressInput.country) : '') || 'United Kingdom';
+    const manualFullAddressParts = [
+      normalizeString(buildingNumber),
+      normalizeString(street),
+      normalizeString(city),
+      normalizeString(county),
+      normalizeString(state),
+      normalizeString(postcode),
+      normalizeString(pincode),
+      resolvedCountry
+    ].filter(part => part.length);
+    if (normalizeString(landmark)) {
+      manualFullAddressParts.push(`Near: ${normalizeString(landmark)}`);
+    }
+    const manualFullAddress = manualFullAddressParts.join(', ');
+
+    const buildAddressPayload = () => {
+      const hasManualFields = normalizeString(buildingNumber) || normalizeString(street) || normalizeString(city) || normalizeString(county) || normalizeString(state) || normalizeString(postcode) || normalizeString(pincode) || normalizeString(landmark);
+      if (addressInput && typeof addressInput === 'object' && Object.keys(addressInput).length > 0) {
+        const fullAddressFromInput = normalizeString(addressInput.fullAddress) || manualFullAddress || normalizeString(addressInput.address);
+        return {
+          buildingNumber: normalizeString(addressInput.buildingNumber) || normalizeString(buildingNumber),
+          street: normalizeString(addressInput.street) || normalizeString(street),
+          city: normalizeString(addressInput.city) || normalizeString(city),
+          county: normalizeString(addressInput.county) || normalizeString(county),
+          state: normalizeString(addressInput.state) || normalizeString(state),
+          postcode: normalizeString(addressInput.postcode) || normalizeString(postcode),
+          country: normalizeString(addressInput.country) || resolvedCountry,
+          landmark: normalizeString(addressInput.landmark) || normalizeString(landmark),
+          fullAddress: fullAddressFromInput || null
+        };
+      }
+
+      if (typeof addressInput === 'string' && normalizeString(addressInput)) {
+        return {
+          buildingNumber: normalizeString(buildingNumber),
+          street: normalizeString(street),
+          city: normalizeString(city),
+          county: normalizeString(county),
+          state: normalizeString(state),
+          postcode: normalizeString(postcode),
+          country: resolvedCountry,
+          landmark: normalizeString(landmark),
+          fullAddress: normalizeString(addressInput)
+        };
+      }
+
+      if (hasManualFields || manualFullAddress) {
+        return {
+          buildingNumber: normalizeString(buildingNumber),
+          street: normalizeString(street),
+          city: normalizeString(city),
+          county: normalizeString(county),
+          state: normalizeString(state),
+          postcode: normalizeString(postcode),
+          country: resolvedCountry,
+          landmark: normalizeString(landmark),
+          fullAddress: manualFullAddress || null
+        };
+      }
+
+      return null;
+    };
+
+    const addressPayload = buildAddressPayload();
+
     let user;
     let token;
 
     // Create business owner in separate collection
     if (userRole === 'business') {
       console.log('Creating business owner with data:', { name, email, phone, role: userRole });
-      user = await BusinessOwner.create({
+      const businessOwnerData = {
         name,
         email: email.toLowerCase(),
         phone,
         passwordHash: password,
         role: 'business'
-      });
+      };
+
+      if (addressPayload) {
+        businessOwnerData.address = {
+          ...addressPayload,
+          country: addressPayload.country || 'United Kingdom'
+        };
+      }
+
+      user = await BusinessOwner.create(businessOwnerData);
       console.log('✅ Business owner created successfully:', user._id);
       
       // Generate token with userType to identify collection
@@ -183,13 +275,27 @@ exports.register = async (req, res, next) => {
     } else {
       // Create customer in User collection
       console.log('Creating customer with data:', { name, email, phone, role: userRole });
-      user = await User.create({
+      const userCreatePayload = {
         name,
         email: email.toLowerCase(),
         phone,
         passwordHash: password,
         role: userRole
-      });
+      };
+
+      if (addressPayload) {
+        userCreatePayload.address = {
+          ...addressPayload,
+          country: addressPayload.country || 'United Kingdom'
+        };
+        userCreatePayload.location = {
+          type: 'Point',
+          coordinates: [0, 0],
+          address: addressPayload.fullAddress || manualFullAddress || ''
+        };
+      }
+
+      user = await User.create(userCreatePayload);
       console.log('✅ Customer created successfully:', user._id);
       
       // Generate token with userType
