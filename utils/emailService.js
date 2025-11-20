@@ -1,15 +1,35 @@
 const nodemailer = require('nodemailer');
 const logger = require('./logger');
 
-// Email service: SendGrid SMTP (Production) or Gmail SMTP (Development)
+// Try to use SendGrid API if available (better for production)
+let sendGridClient = null;
+try {
+  if (process.env.SENDGRID_API_KEY) {
+    sendGridClient = require('@sendgrid/mail');
+    sendGridClient.setApiKey(process.env.SENDGRID_API_KEY);
+    logger.info('✅ SendGrid API initialized');
+    console.log('✅ SendGrid API initialized');
+  }
+} catch (error) {
+  // @sendgrid/mail not installed, will use SMTP
+  logger.info('ℹ️  SendGrid API package not found, using SMTP');
+}
+
+// Email service: SendGrid API (preferred) or SMTP (fallback)
 const isProduction = process.env.NODE_ENV === 'production';
-const useSendGrid = isProduction && process.env.SMTP_HOST === 'smtp.sendgrid.net';
+const useSendGridAPI = !!process.env.SENDGRID_API_KEY && sendGridClient;
+const useSendGridSMTP = isProduction && process.env.SMTP_HOST === 'smtp.sendgrid.net' && !useSendGridAPI;
 
 let transporter = null;
 
-// Initialize SMTP service
-if (useSendGrid) {
-  // SendGrid SMTP for production
+// Initialize email service
+if (useSendGridAPI) {
+  // SendGrid API (best option - no connection issues)
+  logger.info('✅ Email service ready (SendGrid API)');
+  console.log('✅ Email service ready (SendGrid API)');
+  console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || 'NOT SET');
+} else if (useSendGridSMTP) {
+  // SendGrid SMTP for production (fallback)
   transporter = nodemailer.createTransport({
     host: 'smtp.sendgrid.net',
     port: parseInt(process.env.SMTP_PORT) || 587,
@@ -17,14 +37,22 @@ if (useSendGrid) {
     auth: {
       user: 'apikey', // SendGrid uses literal "apikey" as username
       pass: process.env.SMTP_PASS
-    }
+    },
+    connectionTimeout: 10000, // 10 seconds
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
+    pool: true,
+    maxConnections: 1,
+    maxMessages: 3
   });
 
-  // Verify SendGrid connection
+  // Verify SendGrid connection (non-blocking)
   transporter.verify((error, success) => {
     if (error) {
-      logger.error('❌ SendGrid SMTP connection error:', error.message);
-      console.log('❌ SendGrid SMTP connection error:', error.message);
+      logger.warn('⚠️  SendGrid SMTP connection warning:', error.message);
+      logger.warn('💡 Consider using SENDGRID_API_KEY instead of SMTP for better reliability');
+      console.log('⚠️  SendGrid SMTP connection warning:', error.message);
+      console.log('💡 Tip: Use SENDGRID_API_KEY environment variable for better reliability');
     } else {
       logger.info('✅ Email service ready (SendGrid SMTP)');
       console.log('✅ Email service ready (SendGrid SMTP)');
@@ -43,14 +71,17 @@ if (useSendGrid) {
     },
     tls: {
       rejectUnauthorized: false
-    }
+    },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000
   });
 
-  // Verify SMTP connection
+  // Verify SMTP connection (non-blocking)
   transporter.verify((error, success) => {
     if (error) {
-      logger.error('❌ SMTP connection error:', error.message);
-      console.log('❌ SMTP connection error:', error.message);
+      logger.warn('⚠️  SMTP connection warning:', error.message);
+      console.log('⚠️  SMTP connection warning:', error.message);
       console.log('💡 Make sure you are using correct SMTP credentials');
     } else {
       logger.info('✅ Email service ready (SMTP)');
@@ -67,14 +98,7 @@ const sendOTPEmail = async (to, otp, name = 'User') => {
     // Determine from email: use FROM_EMAIL or SMTP_USER
     const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER || 'noreply@gmail.com';
     
-    const mailOptions = {
-      from: {
-        name: 'HashView',
-        address: fromEmail
-      },
-      to: to,
-      subject: 'Welcome to HashView - Verify Your Email',
-      html: `
+    const emailHtml = `
         <!DOCTYPE html>
         <html>
         <head>
@@ -169,18 +193,53 @@ const sendOTPEmail = async (to, otp, name = 'User') => {
           </table>
         </body>
         </html>
-      `
-    };
+      `;
 
-    // Send email via SMTP (SendGrid in production, Gmail in development)
-    const info = await transporter.sendMail(mailOptions);
-    logger.info(`✅ Email sent successfully to ${to}`);
-    console.log(`✅ Email sent to: ${to}`);
-    console.log(`📧 Message ID: ${info.messageId}`);
-    return info;
+    // Send email via SendGrid API (preferred) or SMTP (fallback)
+    if (useSendGridAPI) {
+      // Use SendGrid API
+      const msg = {
+        to: to,
+        from: {
+          email: fromEmail,
+          name: 'HashView'
+        },
+        subject: 'Welcome to HashView - Verify Your Email',
+        html: emailHtml
+      };
+
+      const response = await sendGridClient.send(msg);
+      logger.info(`✅ Email sent successfully to ${to} via SendGrid API`);
+      console.log(`✅ Email sent to: ${to}`);
+      console.log(`📧 Status Code: ${response[0].statusCode}`);
+      return { messageId: response[0].headers['x-message-id'] || 'sent' };
+    } else {
+      // Use SMTP (SendGrid or Gmail)
+      const mailOptions = {
+        from: {
+          name: 'HashView',
+          address: fromEmail
+        },
+        to: to,
+        subject: 'Welcome to HashView - Verify Your Email',
+        html: emailHtml
+      };
+
+      const info = await transporter.sendMail(mailOptions);
+      logger.info(`✅ Email sent successfully to ${to}`);
+      console.log(`✅ Email sent to: ${to}`);
+      console.log(`📧 Message ID: ${info.messageId}`);
+      return info;
+    }
   } catch (error) {
     logger.error('❌ Error sending email:', error);
     console.error('❌ Error sending email:', error.message);
+    
+    // If SendGrid API fails, log helpful message
+    if (useSendGridAPI) {
+      logger.error('💡 Check SENDGRID_API_KEY is valid and has Mail Send permissions');
+    }
+    
     throw error;
   }
 };
@@ -191,14 +250,7 @@ const sendPasswordResetEmail = async (to, otp, name = 'User') => {
     // Determine from email: use FROM_EMAIL or SMTP_USER
     const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER || 'noreply@gmail.com';
     
-    const mailOptions = {
-      from: {
-        name: 'HashView',
-        address: fromEmail
-      },
-      to: to,
-      subject: 'Reset Your HashView Password',
-      html: `
+    const emailHtml = `
         <!DOCTYPE html>
         <html>
         <head>
@@ -257,13 +309,40 @@ const sendPasswordResetEmail = async (to, otp, name = 'User') => {
           </table>
         </body>
         </html>
-      `
-    };
+      `;
 
-    // Send email via SMTP (SendGrid in production, Gmail in development)
-    const info = await transporter.sendMail(mailOptions);
-    logger.info(`✅ Password reset email sent to ${to}`);
-    return info;
+    // Send email via SendGrid API (preferred) or SMTP (fallback)
+    if (useSendGridAPI) {
+      // Use SendGrid API
+      const msg = {
+        to: to,
+        from: {
+          email: fromEmail,
+          name: 'HashView'
+        },
+        subject: 'Reset Your HashView Password',
+        html: emailHtml
+      };
+
+      const response = await sendGridClient.send(msg);
+      logger.info(`✅ Password reset email sent to ${to} via SendGrid API`);
+      return { messageId: response[0].headers['x-message-id'] || 'sent' };
+    } else {
+      // Use SMTP (SendGrid or Gmail)
+      const mailOptions = {
+        from: {
+          name: 'HashView',
+          address: fromEmail
+        },
+        to: to,
+        subject: 'Reset Your HashView Password',
+        html: emailHtml
+      };
+
+      const info = await transporter.sendMail(mailOptions);
+      logger.info(`✅ Password reset email sent to ${to}`);
+      return info;
+    }
   } catch (error) {
     logger.error('❌ Error sending password reset email:', error);
     throw error;

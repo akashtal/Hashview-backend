@@ -21,6 +21,7 @@
   "author": "HashView Team",
   "license": "MIT",
   "dependencies": {
+    "@sendgrid/mail": "^8.1.0",
     "@sentry/node": "^7.99.0",
     "@sentry/profiling-node": "^1.3.3",
     "axios": "^1.6.2",
