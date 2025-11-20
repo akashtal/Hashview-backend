@@ -17,8 +17,26 @@ exports.getCoupons = async (req, res, next) => {
     query.validUntil = { $gte: new Date() };
 
     const coupons = await Coupon.find(query)
-      .populate('business', 'name logo address')
+      .populate('business', 'name logo address phone email category')
       .sort({ createdAt: -1 });
+    
+    // Ensure qrCodeData is included for all coupons
+    for (const coupon of coupons) {
+      if (!coupon.qrCodeData && coupon._id) {
+        // Generate QR code data if missing
+        const qrCodeData = JSON.stringify({
+          type: 'coupon',
+          couponId: coupon._id.toString(),
+          code: coupon.code,
+          businessId: coupon.business?._id?.toString() || '',
+          userId: coupon.user?.toString() || '',
+          timestamp: new Date().toISOString()
+        });
+        coupon.qrCodeData = qrCodeData;
+        // Optionally save it to database
+        await Coupon.findByIdAndUpdate(coupon._id, { qrCodeData });
+      }
+    }
 
     res.status(200).json({
       success: true,

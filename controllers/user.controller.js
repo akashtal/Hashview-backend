@@ -123,8 +123,26 @@ exports.getUserCoupons = async (req, res, next) => {
     query.validUntil = { $gte: new Date() };
 
     const coupons = await Coupon.find(query)
-      .populate('business', 'name logo')
+      .populate('business', 'name logo address phone email category')
       .sort({ createdAt: -1 });
+    
+    // Ensure qrCodeData is included for all coupons
+    for (const coupon of coupons) {
+      if (!coupon.qrCodeData && coupon._id) {
+        // Generate QR code data if missing
+        const qrCodeData = JSON.stringify({
+          type: 'coupon',
+          couponId: coupon._id.toString(),
+          code: coupon.code,
+          businessId: coupon.business?._id?.toString() || '',
+          userId: coupon.user?.toString() || '',
+          timestamp: new Date().toISOString()
+        });
+        coupon.qrCodeData = qrCodeData;
+        // Optionally save it to database
+        await Coupon.findByIdAndUpdate(coupon._id, { qrCodeData });
+      }
+    }
 
     res.status(200).json({
       success: true,
@@ -146,11 +164,29 @@ exports.getRewardHistory = async (req, res, next) => {
     const skip = (page - 1) * limit;
 
     const coupons = await Coupon.find({ user: req.user.id })
-      .populate('business', 'name logo')
+      .populate('business', 'name logo address phone email category')
       .populate('review', 'rating comment')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
+    
+    // Ensure qrCodeData is included for all coupons
+    for (const coupon of coupons) {
+      if (!coupon.qrCodeData && coupon._id) {
+        // Generate QR code data if missing
+        const qrCodeData = JSON.stringify({
+          type: 'coupon',
+          couponId: coupon._id.toString(),
+          code: coupon.code,
+          businessId: coupon.business?._id?.toString() || '',
+          userId: coupon.user?.toString() || '',
+          timestamp: new Date().toISOString()
+        });
+        coupon.qrCodeData = qrCodeData;
+        // Optionally save it to database
+        await Coupon.findByIdAndUpdate(coupon._id, { qrCodeData });
+      }
+    }
 
     const total = await Coupon.countDocuments({ user: req.user.id });
 
