@@ -19,21 +19,21 @@ async function logSuspiciousBehavior(userId, eventType, metadata) {
     timestamp: new Date(),
     ipAddress: metadata.ipAddress || null
   };
-  
+
   // Store in memory (in production, save to database)
   suspiciousActivityLog.push(logEntry);
-  
+
   // Keep only last 1000 entries
   if (suspiciousActivityLog.length > 1000) {
     suspiciousActivityLog.shift();
   }
-  
+
   // Log to file
   logger.warn(`🚨 Suspicious Activity: ${eventType}`, logEntry);
-  
+
   // TODO: In production, save to SuspiciousActivity collection
   // await SuspiciousActivity.create(logEntry);
-  
+
   return logEntry;
 }
 
@@ -94,7 +94,7 @@ exports.clearSuspiciousActivities = async (req, res, next) => {
   try {
     const count = suspiciousActivityLog.length;
     suspiciousActivityLog.length = 0; // Clear array
-    
+
     logger.info(`🧹 Suspicious activities log cleared by admin (${count} entries removed)`);
 
     res.status(200).json({
@@ -111,12 +111,13 @@ exports.clearSuspiciousActivities = async (req, res, next) => {
 // @access  Private
 exports.createReview = async (req, res, next) => {
   try {
-    const { 
-      business: businessId, 
-      rating, 
-      comment, 
-      latitude, 
-      longitude, 
+    const {
+      business: businessId,
+      rating,
+      comment,
+      emotion, // Add emotion field
+      latitude,
+      longitude,
       images,
       videos, // Videos array with URLs from Cloudinary
       // 🔒 COMPREHENSIVE SECURITY METADATA from frontend
@@ -129,13 +130,13 @@ exports.createReview = async (req, res, next) => {
       deviceFingerprint,
       devicePlatform
     } = req.body;
-    
+
     // Geofencing security validation
     console.log(`🔒 Review attempt - User: ${req.user.id}, Business: ${businessId}`);
 
     // Get business
     const business = await Business.findById(businessId);
-    
+
     if (!business) {
       return res.status(404).json({
         success: false,
@@ -153,7 +154,7 @@ exports.createReview = async (req, res, next) => {
     // SECURITY CHECK #1: Rate Limiting - Max 5 reviews per day
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const todayReviewCount = await Review.countDocuments({
       user: req.user.id,
       createdAt: { $gte: today }
@@ -164,7 +165,7 @@ exports.createReview = async (req, res, next) => {
         reviewCount: todayReviewCount,
         businessId: businessId
       });
-      
+
       return res.status(429).json({
         success: false,
         message: 'Review limit reached. You can post maximum 5 reviews per day. This helps maintain review quality.'
@@ -190,7 +191,7 @@ exports.createReview = async (req, res, next) => {
     // Verify geofencing - user must be within business radius
     const businessLat = business.location.coordinates[1];
     const businessLon = business.location.coordinates[0];
-    
+
     // Verify geofencing
     const withinGeofence = isWithinGeofence(
       latitude,
@@ -199,7 +200,7 @@ exports.createReview = async (req, res, next) => {
       businessLon,
       business.radius
     );
-    
+
     const { calculateDistance } = require('../utils/geolocation');
     const actualDistance = calculateDistance(latitude, longitude, businessLat, businessLon);
 
@@ -209,7 +210,7 @@ exports.createReview = async (req, res, next) => {
         distance: actualDistance,
         allowedRadius: business.radius
       });
-      
+
       return res.status(403).json({
         success: false,
         message: `You must be within ${business.radius}m of the business to post a review. You are currently ${actualDistance.toFixed(0)}m away.`
@@ -217,14 +218,14 @@ exports.createReview = async (req, res, next) => {
     }
 
     // 🔒 COMPREHENSIVE SECURITY VALIDATION
-    
+
     // GPS Accuracy check
     if (locationAccuracy && locationAccuracy > 50) {
       await logSuspiciousBehavior(req.user.id, 'POOR_GPS_ACCURACY', {
         businessId: businessId,
         accuracy: locationAccuracy
       });
-      
+
       return res.status(400).json({
         success: false,
         message: `GPS accuracy is too low (${Math.round(locationAccuracy)}m). Please improve your GPS signal and try again.`
@@ -245,7 +246,7 @@ exports.createReview = async (req, res, next) => {
         businessId: businessId,
         devicePlatform: devicePlatform
       });
-      
+
       return res.status(403).json({
         success: false,
         message: 'Mock/fake GPS location detected. Please disable any location spoofing apps and use your real GPS location.'
@@ -269,7 +270,7 @@ exports.createReview = async (req, res, next) => {
           timestamp: activity.timestamp
         });
       }
-      
+
       if (suspiciousActivities.length >= 3) {
         return res.status(403).json({
           success: false,
@@ -285,7 +286,7 @@ exports.createReview = async (req, res, next) => {
         'securityMetadata.deviceFingerprint.deviceId': deviceFingerprint.deviceId,
         createdAt: { $gte: today }
       });
-      
+
       if (sameDeviceReviews >= 3) {
         await logSuspiciousBehavior(req.user.id, 'MULTIPLE_DEVICE_REVIEWS', {
           businessId: businessId,
@@ -301,6 +302,7 @@ exports.createReview = async (req, res, next) => {
       business: businessId,
       rating,
       comment,
+      emotion: emotion || null, // Add emotion field
       geolocation: {
         type: 'Point',
         coordinates: [longitude, latitude]
@@ -323,7 +325,7 @@ exports.createReview = async (req, res, next) => {
         submittedAt: new Date()
       }
     });
-    
+
     // Log successful review submission
     logger.info(`✅ Review created successfully`, {
       reviewId: review._id,
@@ -336,7 +338,7 @@ exports.createReview = async (req, res, next) => {
     // Update business rating
     const reviews = await Review.find({ business: businessId });
     const avgRating = reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length;
-    
+
     business.rating.average = avgRating;
     business.rating.count = reviews.length;
     business.reviewCount = reviews.length;
@@ -411,7 +413,7 @@ exports.createReview = async (req, res, next) => {
       reviewId: review._id.toString(),
       timestamp: new Date().toISOString()
     });
-    
+
     // Update coupon with QR code data
     coupon.qrCodeData = qrCodeData;
     await coupon.save();
@@ -428,14 +430,14 @@ exports.createReview = async (req, res, next) => {
     await review.save();
 
     // Send notification to user
-    const couponMessage = rewardType === 'percentage' 
+    const couponMessage = rewardType === 'percentage'
       ? `You've earned a ${rewardValue}% discount coupon! Valid for 2 hours.`
       : rewardType === 'fixed'
-      ? `You've earned a ₹${rewardValue} discount coupon! Valid for 2 hours.`
-      : rewardType === 'buy1get1'
-      ? `You've earned a Buy 1 Get 1 coupon! Valid for 2 hours.`
-      : `You've earned a free drink coupon! Valid for 2 hours.`;
-    
+        ? `You've earned a ₹${rewardValue} discount coupon! Valid for 2 hours.`
+        : rewardType === 'buy1get1'
+          ? `You've earned a Buy 1 Get 1 coupon! Valid for 2 hours.`
+          : `You've earned a free drink coupon! Valid for 2 hours.`;
+
     await sendPushNotification(
       req.user.id,
       'Coupon Earned! 🎉',
@@ -471,7 +473,7 @@ exports.getBusinessReviews = async (req, res, next) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const reviews = await Review.find({ 
+    const reviews = await Review.find({
       business: req.params.businessId,
       status: 'approved'
     })
@@ -480,7 +482,7 @@ exports.getBusinessReviews = async (req, res, next) => {
       .skip(skip)
       .limit(limit);
 
-    const total = await Review.countDocuments({ 
+    const total = await Review.countDocuments({
       business: req.params.businessId,
       status: 'approved'
     });
@@ -635,30 +637,30 @@ exports.markHelpful = async (req, res, next) => {
 exports.getSuspiciousActivities = async (req, res, next) => {
   try {
     const { limit = 100, eventType } = req.query;
-    
+
     let activities = [...suspiciousActivityLog];
-    
+
     // Filter by event type if specified
     if (eventType) {
       activities = activities.filter(a => a.eventType === eventType);
     }
-    
+
     // Sort by most recent first
     activities.sort((a, b) => b.timestamp - a.timestamp);
-    
+
     // Limit results
     activities = activities.slice(0, parseInt(limit));
-    
+
     // Get summary statistics
     const stats = {
       total: suspiciousActivityLog.length,
       byType: {}
     };
-    
+
     suspiciousActivityLog.forEach(activity => {
       stats.byType[activity.eventType] = (stats.byType[activity.eventType] || 0) + 1;
     });
-    
+
     res.status(200).json({
       success: true,
       count: activities.length,
@@ -678,7 +680,7 @@ exports.getFlaggedReviews = async (req, res, next) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-    
+
     // Find reviews with suspicious metadata
     const flaggedReviews = await Review.find({
       $or: [
@@ -693,7 +695,7 @@ exports.getFlaggedReviews = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
-    
+
     const total = await Review.countDocuments({
       $or: [
         { 'metadata.verificationTime': { $lt: 10 } },
@@ -702,7 +704,7 @@ exports.getFlaggedReviews = async (req, res, next) => {
         { 'metadata.isMockLocation': true }
       ]
     });
-    
+
     res.status(200).json({
       success: true,
       count: flaggedReviews.length,
@@ -723,9 +725,9 @@ exports.clearSuspiciousActivities = async (req, res, next) => {
   try {
     const clearedCount = suspiciousActivityLog.length;
     suspiciousActivityLog.length = 0; // Clear array
-    
+
     logger.info(`🧹 Suspicious activity log cleared by admin (${clearedCount} entries)`);
-    
+
     res.status(200).json({
       success: true,
       message: `Cleared ${clearedCount} suspicious activity entries`

@@ -23,6 +23,11 @@ const reviewSchema = new mongoose.Schema({
     minlength: [10, 'Comment must be at least 10 characters'],
     maxlength: [500, 'Comment cannot exceed 500 characters']
   },
+  emotion: {
+    type: String,
+    enum: ['loved', 'happy', 'okay', 'disappointed', 'frustrated', 'amazing', null],
+    default: null
+  },
   images: [{
     url: String,
     publicId: String

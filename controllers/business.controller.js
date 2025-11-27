@@ -57,7 +57,7 @@ exports.registerBusiness = async (req, res, next) => {
       if (postcode) addressParts.push(postcode);
       if (pincode) addressParts.push(pincode);
       if (landmark) addressParts.push(`Near: ${landmark}`);
-      
+
       businessData.address = {
         buildingNumber: buildingNumber || '',
         street: street || '',
@@ -88,7 +88,7 @@ exports.registerBusiness = async (req, res, next) => {
         pincode: address.pincode || '',
         zipCode: address.zipCode || address.postcode || address.pincode || '',
         country: address.country || country || 'United Kingdom',
-        fullAddress: address.fullAddress || 
+        fullAddress: address.fullAddress ||
           `${address.buildingNumber || ''} ${address.street || ''}, ${address.city || ''}, ${address.county || ''}, ${address.postcode || address.zipCode || ''}`.replace(/\s+/g, ' ').replace(/, ,/g, ',').replace(/^, |, $/g, '').trim()
       };
     } else {
@@ -106,7 +106,7 @@ exports.registerBusiness = async (req, res, next) => {
         message: 'Business location (latitude and longitude) is required for geofencing functionality. Please enable location services and try again.'
       });
     }
-    
+
     businessData.location = {
       type: 'Point',
       coordinates: [parseFloat(longitude), parseFloat(latitude)]
@@ -243,7 +243,7 @@ exports.registerBusiness = async (req, res, next) => {
       message: error.message,
       stack: error.stack
     });
-    
+
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(e => e.message);
       return res.status(400).json({
@@ -252,7 +252,7 @@ exports.registerBusiness = async (req, res, next) => {
         errors: errors
       });
     }
-    
+
     next(error);
   }
 };
@@ -398,7 +398,7 @@ exports.getNearbyBusinesses = async (req, res, next) => {
     // Server-side star-based rating filters
     if (ratingSource && minRating) {
       const minRatingValue = parseFloat(minRating);
-      
+
       // Filter by specific rating source and star level
       if (ratingSource === 'hashview') {
         query['rating.average'] = { $gte: minRatingValue };
@@ -409,21 +409,30 @@ exports.getNearbyBusinesses = async (req, res, next) => {
       }
     }
 
+    console.log(`   🔍 Executing MongoDB $near query with maxDistance: ${maxDistance}m`);
     const businesses = await Business.find(query)
       .select('-documents')
       .limit(50);
 
+    console.log(`   📊 MongoDB returned ${businesses.length} businesses`);
+
     // Calculate distance for each business and add to response
-    const businessesWithDistance = businesses.map(business => {
+    const businessesWithDistance = businesses.map((business, index) => {
       const businessObj = business.toObject();
       if (business.location && business.location.coordinates) {
-        const distance = calculateDistance(
+        const distanceInMeters = calculateDistance(
           parseFloat(latitude),
           parseFloat(longitude),
           business.location.coordinates[1], // latitude
           business.location.coordinates[0]  // longitude
         );
-        businessObj.distance = distance;
+        const distanceInKm = distanceInMeters / 1000;
+        businessObj.distance = distanceInKm; // Convert to KM for frontend
+
+        // Log first 3 businesses
+        if (index < 3) {
+          console.log(`      ${index + 1}. ${business.name}: ${distanceInKm.toFixed(2)}km (${distanceInMeters.toFixed(0)}m)`);
+        }
       }
       return businessObj;
     });
@@ -464,11 +473,11 @@ const escapeRegExp = (string) => {
 exports.getAllActiveBusinesses = async (req, res, next) => {
   try {
     const { category, limit, ratingSource, minRating, search, query: legacyQuery } = req.query;
-    
+
     console.log('📋 getAllActiveBusinesses request:', { category, ratingSource, minRating, limit, search: search || legacyQuery });
-    
+
     const query = { status: 'active' };
-    
+
     // Search query (backend handles case-insensitive search)
     const searchTerm = search || legacyQuery;
     if (searchTerm && searchTerm.trim() !== '') {
@@ -481,7 +490,7 @@ exports.getAllActiveBusinesses = async (req, res, next) => {
         { 'address.state': { $regex: searchTerm.trim(), $options: 'i' } }
       ];
     }
-    
+
     if (category && category !== 'all') {
       const trimmedCategory = category.trim();
       query.category = {
@@ -492,9 +501,9 @@ exports.getAllActiveBusinesses = async (req, res, next) => {
     // Server-side star-based rating filters
     if (ratingSource && minRating) {
       const minRatingValue = parseFloat(minRating);
-      
+
       console.log(`   🎯 Applying ${ratingSource} rating filter: ≥${minRatingValue} stars`);
-      
+
       // Filter by specific rating source and star level
       if (ratingSource === 'hashview') {
         query['rating.average'] = { $gte: minRatingValue };
@@ -537,20 +546,20 @@ exports.getAllActiveBusinesses = async (req, res, next) => {
 // @access  Public
 exports.searchBusinesses = async (req, res, next) => {
   try {
-    const { 
+    const {
       search,        // Real-time search query
       query,         // Legacy query param (for backward compatibility)
-      category, 
-      city, 
-      ratingSource, 
+      category,
+      city,
+      ratingSource,
       minRating,
       latitude,      // User's location for distance sorting
       longitude,
       limit          // Limit results (for autocomplete)
     } = req.query;
-    
+
     console.log('🔍 Search request:', { search, query, latitude, longitude, limit });
-    
+
     // Show only active businesses for user search
     const searchQuery = { status: 'active' };
 
@@ -581,7 +590,7 @@ exports.searchBusinesses = async (req, res, next) => {
     // Server-side star-based rating filters
     if (ratingSource && minRating) {
       const minRatingValue = parseFloat(minRating);
-      
+
       // Filter by specific rating source and star level
       if (ratingSource === 'hashview') {
         searchQuery['rating.average'] = { $gte: minRatingValue };
@@ -601,19 +610,19 @@ exports.searchBusinesses = async (req, res, next) => {
     if (latitude && longitude) {
       const userLat = parseFloat(latitude);
       const userLon = parseFloat(longitude);
-      
+
       // Add distance to each business
       businesses = businesses.map(business => {
         const businessLat = business.location.coordinates[1];
         const businessLon = business.location.coordinates[0];
         const distance = calculateDistance(userLat, userLon, businessLat, businessLon);
-        
+
         return {
           ...business.toObject(),
           distance: distance / 1000 // Convert to kilometers
         };
       });
-      
+
       // Sort by distance (nearest first)
       businesses.sort((a, b) => a.distance - b.distance);
     } else {
@@ -693,10 +702,10 @@ function checkIfBusinessIsOpen(openingHours) {
     if (!timeStr || timeStr === 'Closed') return null;
     const [time, period] = timeStr.split(' ');
     let [hours, minutes] = time.split(':').map(Number);
-    
+
     if (period === 'PM' && hours !== 12) hours += 12;
     if (period === 'AM' && hours === 12) hours = 0;
-    
+
     return hours * 60 + minutes; // Return minutes since midnight
   };
 
@@ -709,7 +718,7 @@ function checkIfBusinessIsOpen(openingHours) {
   }
 
   const isOpen = currentMinutes >= openMinutes && currentMinutes < closeMinutes;
-  
+
   let status, nextChange;
   if (isOpen) {
     status = `Open • Closes at ${todayHours.close}`;
@@ -724,7 +733,7 @@ function checkIfBusinessIsOpen(openingHours) {
       const nextDayIndex = (now.getDay() + i) % 7;
       const nextDay = days[nextDayIndex];
       const nextDayHours = openingHours[nextDay];
-      
+
       if (nextDayHours && !nextDayHours.closed && nextDayHours.open !== 'Closed') {
         status = `Closed • Opens ${nextDay.charAt(0).toUpperCase() + nextDay.slice(1)} at ${nextDayHours.open}`;
         break;
@@ -844,10 +853,10 @@ exports.getBusinessByQRCode = async (req, res, next) => {
     }
 
     const { parseQRCodeData } = require('../utils/qrcode');
-    
+
     // Parse QR code data
     const parsed = parseQRCodeData(qrData);
-    
+
     if (!parsed.valid || !parsed.businessId) {
       return res.status(400).json({
         success: false,
@@ -1154,7 +1163,7 @@ exports.updateTripAdvisorRating = async (req, res, next) => {
         updated = true;
       }
     }
-    
+
     if (reviewCount !== undefined && reviewCount !== null && reviewCount !== '') {
       const parsedCount = parseInt(reviewCount);
       if (!isNaN(parsedCount)) {
@@ -1163,7 +1172,7 @@ exports.updateTripAdvisorRating = async (req, res, next) => {
         updated = true;
       }
     }
-    
+
     if (profileUrl !== undefined && profileUrl !== null && profileUrl !== '') {
       business.externalProfiles.tripAdvisor.profileUrl = profileUrl.trim();
       console.log('✅ Updated profile URL:', profileUrl);

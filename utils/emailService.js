@@ -18,7 +18,8 @@ try {
 // Email service: SendGrid API (preferred) or SMTP (fallback)
 const isProduction = process.env.NODE_ENV === 'production';
 const useSendGridAPI = !!process.env.SENDGRID_API_KEY && sendGridClient;
-const useSendGridSMTP = isProduction && process.env.SMTP_HOST === 'smtp.sendgrid.net' && !useSendGridAPI;
+const useGoogleSMTP = process.env.SMTP_HOST === 'smtp.gmail.com' || (!process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_USER.includes('@gmail.com'));
+const useSendGridSMTP = process.env.SMTP_HOST === 'smtp.sendgrid.net' && !useSendGridAPI;
 
 let transporter = null;
 
@@ -28,6 +29,51 @@ if (useSendGridAPI) {
   logger.info('✅ Email service ready (SendGrid API)');
   console.log('✅ Email service ready (SendGrid API)');
   console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || 'NOT SET');
+} else if (useGoogleSMTP) {
+  // Google SMTP (Gmail) - works in production (Elastic Beanstalk compatible)
+  const smtpPort = parseInt(process.env.SMTP_PORT) || 587;
+  const useSSL = smtpPort === 465;
+  
+  transporter = nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: smtpPort,
+    secure: useSSL, // true for 465, false for other ports (TLS)
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS // Must be Gmail App Password, not regular password
+    },
+    tls: {
+      rejectUnauthorized: true, // Verify SSL certificate (required for production)
+      ciphers: 'SSLv3'
+    },
+    // Production-optimized settings for Elastic Beanstalk
+    connectionTimeout: 30000, // 30 seconds (increased for cloud environments)
+    greetingTimeout: 30000,
+    socketTimeout: 30000,
+    pool: true, // Use connection pooling for better performance
+    maxConnections: 5, // Allow multiple concurrent connections
+    maxMessages: 100, // Reuse connections for multiple emails
+    rateDelta: 1000, // Rate limiting
+    rateLimit: 14 // Gmail allows 14 emails per second
+  });
+
+  // Verify Google SMTP connection (non-blocking)
+  transporter.verify((error, success) => {
+    if (error) {
+      logger.warn('⚠️  Google SMTP connection warning:', error.message);
+      logger.warn('💡 Make sure you are using a Gmail App Password (not regular password)');
+      logger.warn('💡 Enable "Less secure app access" or use 2-Step Verification with App Password');
+      console.log('⚠️  Google SMTP connection warning:', error.message);
+      console.log('💡 Make sure you are using a Gmail App Password (not regular password)');
+      console.log('💡 Enable 2-Step Verification and generate an App Password from:');
+      console.log('   https://myaccount.google.com/apppasswords');
+    } else {
+      logger.info('✅ Email service ready (Google SMTP)');
+      console.log('✅ Email service ready (Google SMTP)');
+      console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || process.env.SMTP_USER || 'NOT SET');
+      console.log('🌐 Compatible with Elastic Beanstalk and other cloud platforms');
+    }
+  });
 } else if (useSendGridSMTP) {
   // SendGrid SMTP for production (fallback)
   transporter = nodemailer.createTransport({
@@ -60,7 +106,7 @@ if (useSendGridAPI) {
     }
   });
 } else {
-  // Gmail SMTP for development
+  // Generic SMTP (fallback for other providers)
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_PORT) || 587,
@@ -72,9 +118,9 @@ if (useSendGridAPI) {
     tls: {
       rejectUnauthorized: false
     },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 30000
   });
 
   // Verify SMTP connection (non-blocking)
@@ -235,9 +281,15 @@ const sendOTPEmail = async (to, otp, name = 'User') => {
     logger.error('❌ Error sending email:', error);
     console.error('❌ Error sending email:', error.message);
     
-    // If SendGrid API fails, log helpful message
+    // Provide helpful error messages based on email service
     if (useSendGridAPI) {
       logger.error('💡 Check SENDGRID_API_KEY is valid and has Mail Send permissions');
+    } else if (useGoogleSMTP) {
+      logger.error('💡 Google SMTP Error - Common issues:');
+      logger.error('   1. Make sure you are using a Gmail App Password (not regular password)');
+      logger.error('   2. Enable 2-Step Verification and generate App Password');
+      logger.error('   3. Check SMTP_USER and SMTP_PASS environment variables');
+      logger.error('   4. Verify Elastic Beanstalk security group allows outbound port 587/465');
     }
     
     throw error;
@@ -345,6 +397,12 @@ const sendPasswordResetEmail = async (to, otp, name = 'User') => {
     }
   } catch (error) {
     logger.error('❌ Error sending password reset email:', error);
+    
+    // Provide helpful error messages based on email service
+    if (useGoogleSMTP) {
+      logger.error('💡 Google SMTP Error - Check Gmail App Password and environment variables');
+    }
+    
     throw error;
   }
 };

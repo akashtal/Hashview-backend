@@ -6,32 +6,32 @@ const validate = (schema) => {
     console.log('\n🔍 Validation Check');
     console.log('Schema:', schema._ids || 'createBusiness');
     console.log('Request Body:', JSON.stringify(req.body, null, 2));
-    
-    const { error, value } = schema.validate(req.body, { 
+
+    const { error, value } = schema.validate(req.body, {
       abortEarly: false,
       allowUnknown: false,
       stripUnknown: false
     });
-    
+
     if (error) {
       const errors = error.details.map(detail => {
         const errorMsg = `${detail.path.join('.')}: ${detail.message}`;
         console.log('❌ Validation Error:', errorMsg);
         return errorMsg;
       });
-      
+
       console.log('📋 All Validation Errors:', errors);
-      
+
       return res.status(400).json({
         success: false,
         message: 'Validation failed',
         errors
       });
     }
-    
+
     console.log('✅ Validation passed');
     console.log('Validated Value:', JSON.stringify(value, null, 2));
-    
+
     next();
   };
 };
@@ -94,6 +94,12 @@ const schemas = {
     business: Joi.string().required(),
     rating: Joi.number().min(1).max(5).required(),
     comment: Joi.string().min(10).max(500).required(),
+    emotion: Joi.string().valid(
+      'happy', 'blessed', 'loved', 'sad', 'lovely', 'thankful',
+      'excited', 'in_love', 'crazy', 'grateful', 'blissful',
+      'fantastic', 'silly', 'festive', 'wonderful', 'cool',
+      'amused', 'relaxed', 'positive', 'chill'
+    ).optional(),
     latitude: Joi.number().min(-90).max(90).required(),
     longitude: Joi.number().min(-180).max(180).required(),
     images: Joi.array().optional(),
