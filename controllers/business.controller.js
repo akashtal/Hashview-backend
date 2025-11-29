@@ -40,7 +40,7 @@ exports.registerBusiness = async (req, res, next) => {
       description,
       owner: req.user.id,
       status: 'pending',
-      kycStatus: 'pending',
+      kycStatus: 'approved',
       radius: radius || 50
     };
 

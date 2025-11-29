@@ -23,8 +23,7 @@ const notificationRoutes = require('./routes/notification.routes');
 const chatRoutes = require('./routes/chat.routes');
 const uploadRoutes = require('./routes/upload.routes');
 const externalReviewsRoutes = require('./routes/externalReviews.routes');
-const verificationRoutes = require('./routes/verification.routes');
-const webhookRoutes = require('./routes/webhook.routes');
+
 
 // Import middleware
 const errorHandler = require('./middleware/errorHandler');
@@ -70,8 +69,8 @@ app.use('/uploads', express.static('uploads'));
 
 // Health check
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'OK', 
+  res.status(200).json({
+    status: 'OK',
     message: 'HashView API is running',
     timestamp: new Date().toISOString()
   });
@@ -93,13 +92,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/external-reviews', externalReviewsRoutes);
-app.use('/api/verification', verificationRoutes);
-app.use('/api/webhooks', webhookRoutes);
 app.use('/api/support', supportRoutes);
-
-// Test route for Didit API (useful for debugging in production too)
-const testDiditRoutes = require('./routes/testDidit.routes');
-app.use('/api/test-didit', testDiditRoutes);
 
 // Socket.IO for real-time chat
 const chatSocket = require('./sockets/chat.socket');
@@ -121,9 +114,9 @@ app.use(errorHandler);
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({ 
-    success: false, 
-    message: 'API endpoint not found' 
+  res.status(404).json({
+    success: false,
+    message: 'API endpoint not found'
   });
 });
 
@@ -135,7 +128,7 @@ const createDefaultAdmin = async () => {
 
     // Check if admin already exists
     const existingAdmin = await User.findOne({ email: adminEmail });
-    
+
     if (!existingAdmin) {
       await User.create({
         name: 'System Admin',
@@ -166,21 +159,21 @@ mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-.then(async () => {
-  logger.info('✅ MongoDB Connected Successfully');
-  console.log('✅ MongoDB Connected Successfully');
-  
-  // Initialize Redis (optional)
-  await initializeRedis();
-  
-  // Create default admin account
-  await createDefaultAdmin();
-})
-.catch((err) => {
-  logger.error('❌ MongoDB Connection Error:', err);
-  console.error('❌ MongoDB Connection Error:', err);
-  process.exit(1);
-});
+  .then(async () => {
+    logger.info('✅ MongoDB Connected Successfully');
+    console.log('✅ MongoDB Connected Successfully');
+
+    // Initialize Redis (optional)
+    await initializeRedis();
+
+    // Create default admin account
+    await createDefaultAdmin();
+  })
+  .catch((err) => {
+    logger.error('❌ MongoDB Connection Error:', err);
+    console.error('❌ MongoDB Connection Error:', err);
+    process.exit(1);
+  });
 
 // Start Server
 const PORT = process.env.PORT || 5000;
@@ -194,10 +187,10 @@ process.on('SIGTERM', async () => {
   logger.info('SIGTERM signal received: closing HTTP server');
   server.close(async () => {
     logger.info('HTTP server closed');
-    
+
     // Close Redis
     await closeRedis();
-    
+
     // Close MongoDB (Mongoose 7+ doesn't accept callback)
     try {
       await mongoose.connection.close();
@@ -205,7 +198,7 @@ process.on('SIGTERM', async () => {
     } catch (error) {
       logger.error('Error closing MongoDB connection:', error);
     }
-    
+
     process.exit(0);
   });
 });
