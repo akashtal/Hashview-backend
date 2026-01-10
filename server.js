@@ -49,7 +49,8 @@ const server = http.createServer(app);
 const io = socketIO(server, {
   cors: {
     origin: process.env.FRONTEND_URL || '*',
-    methods: ['GET', 'POST']
+    methods: ['GET', 'POST'],
+    credentials: !!process.env.FRONTEND_URL
   }
 });
 
@@ -58,7 +59,7 @@ app.use(helmet()); // Security headers
 app.use(compression()); // Compress responses
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
-  credentials: true
+  credentials: !!process.env.FRONTEND_URL // Only allow credentials if specific origin is set
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
