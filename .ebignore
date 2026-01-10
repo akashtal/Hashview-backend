@@ -1,0 +1,14 @@
+node_modules
+.git
+.env
+.env.production
+.gitignore
+tests
+coverage
+logs
+nn.zip
+ENV_TEMPLATE_DEVELOPMENT.txt
+example.env
+amplify.yml
+test-connection.html
+jest.config.js
